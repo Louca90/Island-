@@ -12,3 +12,7 @@ Télécharge le dernier APK dans **Releases**, ou utilise « Vérifier » dans l
 2. Pousse sur `main` : GitHub Actions compile et publie l'APK dans la release `vX.Y`.
 
 `app/island.keystore` est une clé de debug (mot de passe `android`) utilisée pour que chaque version s'installe par-dessus la précédente. À remplacer par une vraie clé si l'app est un jour distribuée.
+
+## Secours si les releases GitHub sont en panne
+`dist/Island.apk` + `dist/latest.json` sont poussés directement dans le dépôt à chaque version.
+Le bouton « Vérifier » de l'app regarde les Releases **et** `dist/`, et prend la version la plus récente.

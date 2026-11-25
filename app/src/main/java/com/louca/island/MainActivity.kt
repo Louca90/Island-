@@ -910,18 +910,31 @@ private fun AppsScreen(s: Settings, bars: PaddingValues, onBack: () -> Unit) {
 object Updater {
     suspend fun check(ctx: android.content.Context, repo: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
-            val c = java.net.URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as java.net.HttpURLConnection
-            c.setRequestProperty("Accept", "application/vnd.github+json")
-            c.connectTimeout = 8000; c.readTimeout = 8000
-            if (c.responseCode != 200) return@runCatching "Aucune release trouvée"
-            val o = org.json.JSONObject(c.inputStream.bufferedReader().readText())
-            val tag = o.optString("tag_name").trimStart('v', 'V')
+            fun get(u: String): String? = runCatching {
+                val c = java.net.URL(u).openConnection() as java.net.HttpURLConnection
+                c.setRequestProperty("Accept", "application/vnd.github+json")
+                c.connectTimeout = 8000; c.readTimeout = 8000
+                if (c.responseCode == 200) c.inputStream.bufferedReader().readText() else null
+            }.getOrNull()
+            // Source 1: GitHub Releases (published by CI)
+            val fromRelease: Pair<String, String>? = get("https://api.github.com/repos/$repo/releases/latest")?.let { body ->
+                val o = org.json.JSONObject(body)
+                val assets = o.optJSONArray("assets") ?: return@let null
+                val apk = (0 until assets.length()).map { assets.getJSONObject(it) }
+                    .firstOrNull { it.optString("name").endsWith(".apk") }?.optString("browser_download_url") ?: return@let null
+                o.optString("tag_name").trimStart('v', 'V') to apk
+            }
+            // Source 2: dist/ folder pushed straight into the repo (works even when the Releases service is down)
+            val fromDist: Pair<String, String>? = get("https://raw.githubusercontent.com/$repo/main/dist/latest.json")?.let { body ->
+                val o = org.json.JSONObject(body)
+                val v = o.optString("version"); val f = o.optString("apk", "dist/Island.apk")
+                if (v.isBlank()) null else v to "https://raw.githubusercontent.com/$repo/main/$f"
+            }
+            val best = listOfNotNull(fromRelease, fromDist).maxWithOrNull { x, y -> if (newer(x.first, y.first)) 1 else if (newer(y.first, x.first)) -1 else 0 }
+                ?: return@runCatching "Aucune version trouvée"
+            val (tag, url) = best
             val cur = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "0"
             if (!newer(tag, cur)) return@runCatching "À jour ($cur)"
-            val assets = o.optJSONArray("assets") ?: return@runCatching "Pas d'APK dans la release"
-            val url = (0 until assets.length()).map { assets.getJSONObject(it) }
-                .firstOrNull { it.optString("name").endsWith(".apk") }?.optString("browser_download_url")
-                ?: return@runCatching "Pas d'APK dans la release"
             val dm = ctx.getSystemService(android.app.DownloadManager::class.java)
             val id = dm.enqueue(
                 android.app.DownloadManager.Request(Uri.parse(url))
