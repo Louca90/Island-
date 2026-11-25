@@ -577,7 +577,6 @@ fun IslandRoot(
                     // during a stack swap, sink into the slot behind
                     translationY = ((h0 - h) / 2).coerceAtLeast(0.dp).toPx() + (h0 * .1f + 6.dp).toPx() * sv
                 }
-                .blur((reveal * 3f + sv * 10f).dp, BlurredEdgeTreatment.Unbounded)
                 .size(w, h)
                 .clip(RoundedCornerShape(r))
                 .background(c.bg)
@@ -638,6 +637,7 @@ fun IslandRoot(
             }
             androidx.compose.animation.SharedTransitionLayout(
                 Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f }
+                    .blur((reveal * 4f + sv * 12f).dp, BlurredEdgeTreatment.Unbounded)
             ) {
             val sharedScope = this
             AnimatedContent(
