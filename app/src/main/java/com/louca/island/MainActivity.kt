@@ -164,6 +164,22 @@ object Demo {
 
     fun timer() = IslandStore.upsert(timerAct(true, now(), 0))
 
+    private fun countAct(running: Boolean, endOrLeft: Long): Act = Act(
+        id = "timer:count", kind = Kind.TIMER, pkg = IslandStore.DEMO, appName = "Horloge", title = "Minuteur",
+        countDown = true, chrono = running, duration = 5 * 60_000L,
+        base = if (running) endOrLeft else 0L, position = if (running) 0L else endOrLeft,
+        timeText = fmt(if (running) 0 else endOrLeft),
+        actions = listOf(
+            ActBtn(if (running) "Pause" else "Reprendre", null) {
+                if (running) IslandStore.upsert(countAct(false, (endOrLeft - now()).coerceAtLeast(0)))
+                else IslandStore.upsert(countAct(true, now() + endOrLeft))
+            },
+            ActBtn("Annuler", null) { IslandStore.remove("timer:count") },
+        ),
+    )
+
+    fun countdown() = IslandStore.upsert(countAct(true, now() + 5 * 60_000L))
+
     fun rec() = IslandStore.upsert(
         Act(
             id = "rec:demo", kind = Kind.RECORD, pkg = IslandStore.DEMO, title = "Enregistrement", base = now(), chrono = true,
@@ -336,6 +352,7 @@ private fun Home() {
                     Chip("Notification") { Demo.notif() }
                     Chip("3 notifs (pile)") { Demo.inbox() }
                     Chip("Chrono") { Demo.timer() }
+                    Chip("Minuteur") { Demo.countdown() }
                     Chip("Enregistrement") { Demo.rec() }
                     Chip("Appel") { Demo.call() }
                     Chip("Charge") { Demo.charge() }

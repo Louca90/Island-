@@ -600,3 +600,21 @@ fun TrashIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         drawPath(body, color, style = st)
     }
 }
+
+/** Hourglass (countdown timer). */
+@Composable
+fun HourglassIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        val st = Stroke(w * .1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        drawLine(color, Offset(w * .2f, w * .1f), Offset(w * .8f, w * .1f), w * .1f, StrokeCap.Round)
+        drawLine(color, Offset(w * .2f, w * .9f), Offset(w * .8f, w * .9f), w * .1f, StrokeCap.Round)
+        val body = Path().apply {
+            moveTo(w * .28f, w * .12f); lineTo(w * .28f, w * .26f); lineTo(w * .5f, w * .5f); lineTo(w * .28f, w * .74f); lineTo(w * .28f, w * .88f)
+            moveTo(w * .72f, w * .12f); lineTo(w * .72f, w * .26f); lineTo(w * .5f, w * .5f); lineTo(w * .72f, w * .74f); lineTo(w * .72f, w * .88f)
+        }
+        drawPath(body, color, style = st)
+        val sand = Path().apply { moveTo(w * .36f, w * .84f); lineTo(w * .5f, w * .66f); lineTo(w * .64f, w * .84f); close() }
+        drawPath(sand, color)
+    }
+}

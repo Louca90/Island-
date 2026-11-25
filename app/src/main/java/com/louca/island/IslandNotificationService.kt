@@ -263,22 +263,32 @@ class IslandNotificationService : NotificationListenerService() {
                 // Samsung: running = [Arrêter, Tour] or [Pause, Annuler]; paused = [Reprendre, Réinitialiser]
                 val paused = labels.any { Regex("reprend|resume|d[ée]marr|start|continu|lancer").containsMatchIn(it) }
                 val running = !paused && labels.any { Regex("pause|tour|lap|arr[eê]t|stop").containsMatchIn(it) }
-                val isCount = Regex("minuteur|timer|compte").containsMatchIn("$title ${n.channelId ?: ""}".lowercase())
+                val isCount = countDown || Regex("minuteur|timer|compte|restant|remaining").containsMatchIn("$title $text ${n.channelId ?: ""}".lowercase())
+                val prev = IslandStore.acts.value.find { it.id == "timer:${sbn.key}" }
+                fun total(remaining: Long) = maxOf(prev?.duration ?: 0L, remaining)
                 val act = Act(
                     id = "timer:${sbn.key}", kind = Kind.TIMER, key = sbn.key, pkg = pkg, appName = label(pkg),
                     title = title, text = text, actions = btns.take(2), contentIntent = n.contentIntent,
                 )
                 when {
-                    chrono -> IslandStore.upsert(act.copy(base = n.`when`, chrono = true, countDown = countDown))
+                    chrono -> IslandStore.upsert(act.copy(
+                        base = n.`when`, chrono = true, countDown = isCount,
+                        duration = if (isCount) total(n.`when` - System.currentTimeMillis()) else 0L,
+                    ))
                     paused -> {
                         val raw = tt.ifEmpty { findTime(cv?.text?.toString() ?: "") }
                         if (raw.isEmpty()) return
-                        IslandStore.upsert(act.copy(chrono = false, timeText = com.louca.island.ui.fmt(parseTime(raw))))
+                        val ms = parseTime(raw)
+                        IslandStore.upsert(act.copy(chrono = false, countDown = isCount, timeText = com.louca.island.ui.fmt(ms),
+                            position = if (isCount) ms else 0L,
+                            duration = if (isCount) total(ms) else 0L))
                     }
                     cv != null -> {
                         // Chronometer.base is elapsedRealtime-based: convert to wall clock.
                         val wall = System.currentTimeMillis() - (SystemClock.elapsedRealtime() - cv.base)
-                        IslandStore.upsert(act.copy(base = wall, chrono = true, countDown = cv.isCountDown))
+                        val cd = cv.isCountDown || isCount
+                        IslandStore.upsert(act.copy(base = wall, chrono = true, countDown = cd,
+                            duration = if (cd) total(wall - System.currentTimeMillis()) else 0L))
                     }
                     running && tt.isNotEmpty() -> {
                         // No live chronometer exposed: run our own clock from the time shown, keep it stable across updates.
@@ -287,7 +297,8 @@ class IslandNotificationService : NotificationListenerService() {
                         val nb = if (isCount) now + ms else now - ms
                         val old = IslandStore.acts.value.find { it.id == act.id }
                         val base = if (old != null && old.chrono && kotlin.math.abs(old.base - nb) < 2500) old.base else nb
-                        IslandStore.upsert(act.copy(base = base, chrono = true, countDown = isCount))
+                        IslandStore.upsert(act.copy(base = base, chrono = true, countDown = isCount,
+                            duration = if (isCount) total(ms) else 0L))
                     }
                     else -> {
                         val raw = tt.ifEmpty { findTime(cv?.text?.toString() ?: "") }

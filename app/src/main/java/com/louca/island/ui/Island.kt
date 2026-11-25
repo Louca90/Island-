@@ -525,7 +525,7 @@ private fun BubbleCore(a: Act, c: IslandColors, size: Dp, onTap: () -> Unit) {
                     modifier = Modifier.size(size * .72f).clip(CircleShape)
                 )
             } else Equalizer(a.playing, musicAccent(a, c), inner * .8f)
-            Kind.TIMER -> StopwatchIcon(rememberSeconds(a), c.orange, inner)
+            Kind.TIMER -> if (a.countDown) CountdownRing(a, c, inner) else StopwatchIcon(rememberSeconds(a), c.orange, inner)
             Kind.RECORD -> if (a.variant == 1) MicIcon(c.red, inner) else ScreenRecIcon(c.red, inner)
             Kind.CALL -> HandsetIcon(c.green, inner * .85f)
             Kind.INBOX -> SmallAppIcon(a, c, size * .72f)
@@ -657,6 +657,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
 
         Kind.TIMER -> if (ex) TimerExpanded(a, c, poke) else CompactRow(h0, {
             if (a.variant == 1) SmallAppIcon(a, c, h0 - 12.dp)
+            else if (a.countDown) CountdownRing(a, c, 22.dp, Modifier.padding(start = 4.dp))
             else StopwatchIcon(rememberSeconds(a), c.orange, 19.dp, Modifier.padding(start = 5.dp))
         }, {
             T(rememberClock(a, false), if (a.variant == 1) c.green else c.orange, 15,
@@ -695,7 +696,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             Box(Modifier.padding(start = 0.dp)) {
                 val l = IslandStore.notifs.collectAsState().value
                 Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
-                    l.take(3).forEach { SmallAppIcon(it, c, h0 - 12.dp) }
+                    l.distinctBy { it.pkg }.take(4).forEach { SmallAppIcon(it, c, h0 - 12.dp) }
                 }
             }
         }, {
@@ -1039,9 +1040,9 @@ private fun TimerExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
     Row(Modifier.fillMaxSize().padding(start = 22.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StopwatchIcon(rememberSeconds(a), c.orange, 14.dp)
+                if (a.countDown) HourglassIcon(c.orange, 14.dp) else StopwatchIcon(rememberSeconds(a), c.orange, 14.dp)
                 Spacer(Modifier.width(6.dp))
-                T(a.title.ifBlank { a.appName }, c.dim, 12)
+                T(a.title.ifBlank { if (a.countDown) "Minuteur" else a.appName }, c.dim, 12)
             }
             T(rememberClock(a, a.chrono && !a.countDown), c.orange, 34, FontWeight.Medium, style = Num)
         }
@@ -1236,13 +1237,12 @@ private fun InboxCard(c: IslandColors, poke: () -> Unit) {
                                     dx.snapTo(0f)
                                 }
                                 axis == 1 -> dx.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
-                                axis == 2 && (ty > t || v.y > fling) && cur < l.lastIndex -> {
-                                    dir = 1; IslandStore.inboxIndex.value = cur + 1
+                                axis == 2 && l.size > 1 && (ty > t || v.y > fling) -> {
+                                    dir = 1; IslandStore.inboxIndex.value = (cur + 1) % l.size
                                 }
-                                axis == 2 && (ty < -t || v.y < -fling) && cur > 0 -> {
-                                    dir = -1; IslandStore.inboxIndex.value = cur - 1
+                                axis == 2 && l.size > 1 && (ty < -t || v.y < -fling) -> {
+                                    dir = -1; IslandStore.inboxIndex.value = (cur - 1 + l.size) % l.size
                                 }
-                                axis == 2 && (ty < -t || v.y < -fling) && cur == 0 -> IslandStore.expanded.value = false
                             }
                         }
                     },
@@ -1422,5 +1422,18 @@ fun ZonesOverlay(zones: List<Pair<Float, Float>>, h: Dp) {
                     .border(1.5.dp, Color(0xFFFF3B30), RoundedCornerShape(8.dp))
             )
         }
+    }
+}
+
+
+/** Countdown: an orange ring that empties as time runs out. */
+@Composable
+private fun CountdownRing(a: Act, c: IslandColors, size: Dp, modifier: Modifier = Modifier) {
+    val now = Ticker.now.longValue
+    val left = if (a.chrono) (a.base - now).coerceAtLeast(0) else a.position
+    val frac = if (a.duration > 0) left.toFloat() / a.duration else 1f
+    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+        ProgressRing(frac.coerceIn(0f, 1f), c.orange, c.orange.copy(alpha = .22f), size)
+        HourglassIcon(c.orange, size * .46f)
     }
 }
