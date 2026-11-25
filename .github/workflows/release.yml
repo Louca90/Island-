@@ -43,4 +43,4 @@ jobs:
           name: Island v${{ steps.v.outputs.name }}
           target_commitish: ${{ github.sha }}
           files: Island-*.apk
-          generate_release_notes: true
+          body: "APK signé, s'installe par-dessus la version précédente. Détails dans l'historique des commits."
