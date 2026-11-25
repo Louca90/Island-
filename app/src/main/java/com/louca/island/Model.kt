@@ -1,0 +1,428 @@
+package com.louca.island
+
+import android.app.Application
+import android.app.PendingIntent
+import android.content.Context
+import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.media.session.MediaController
+import android.os.SystemClock
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+class App : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        Prefs.init(this)
+        IslandStore.appContext = this
+    }
+}
+
+enum class ThemeMode { BLACK, GRAPHITE, COLOR, LIGHT }
+
+data class Settings(
+    val theme: ThemeMode = ThemeMode.GRAPHITE,
+    val color: Int = 0xFF26344F.toInt(),
+    val offsetY: Float = 0f,
+    val offsetX: Float = 0f,
+    val pillH: Float = 34f,
+    val pillW: Float = 1f,
+    val expW: Float = 352f,
+    val showIdle: Boolean = false,
+    val lockAnim: Boolean = true,
+    val peekNotifs: Boolean = true,
+    val hideFullscreen: Boolean = true,
+    val hideShade: Boolean = true,
+    val camMask: Boolean = true,
+    val camSize: Float = 22f,
+    val camGuide: Boolean = false,
+    val showNav: Boolean = true,
+    val showLive: Boolean = true,
+    val showSystem: Boolean = true,
+    val blocked: Set<String> = emptySet(),
+    val showOtp: Boolean = true,
+    val showAlarm: Boolean = true,
+    val showEvents: Boolean = true,
+    val eventLead: Float = 15f,
+    val showBuds: Boolean = true,
+    val showLyrics: Boolean = true,
+    val updateRepo: String = "",
+    val guideSeen: Boolean = false,
+)
+
+object Prefs {
+    private lateinit var sp: SharedPreferences
+    val state = MutableStateFlow(Settings())
+
+    fun init(c: Context) {
+        appCtx = c.applicationContext
+        sp = c.getSharedPreferences("island", 0)
+        state.value = Settings(
+            theme = ThemeMode.entries.getOrElse(sp.getInt("theme", 1)) { ThemeMode.GRAPHITE },
+            color = sp.getInt("color", 0xFF26344F.toInt()),
+            offsetY = sp.getFloat("offY", 0f),
+            offsetX = sp.getFloat("offX", 0f),
+            pillH = sp.getFloat("pillH", 34f),
+            pillW = sp.getFloat("pillW", 1f),
+            expW = sp.getFloat("expW", 352f),
+            showIdle = sp.getBoolean("idle", false),
+            lockAnim = sp.getBoolean("lock", true),
+            peekNotifs = sp.getBoolean("peek", true),
+            hideFullscreen = sp.getBoolean("fs", true),
+            hideShade = sp.getBoolean("shade", true),
+            camMask = sp.getBoolean("camMask", true),
+            camSize = sp.getFloat("camSize", 22f),
+            camGuide = sp.getBoolean("camGuide", false),
+            showNav = sp.getBoolean("nav", true),
+            showLive = sp.getBoolean("live", true),
+            showSystem = sp.getBoolean("sys", true),
+            blocked = sp.getStringSet("blocked", emptySet())?.toSet() ?: emptySet(),
+            showOtp = sp.getBoolean("otp", true),
+            showAlarm = sp.getBoolean("alarm", true),
+            showEvents = sp.getBoolean("events", true),
+            eventLead = sp.getFloat("eventLead", 15f),
+            showBuds = sp.getBoolean("buds", true),
+            showLyrics = sp.getBoolean("lyrics", true),
+            updateRepo = sp.getString("repo", "Louca90/Island-")?.let { if (it == "Louca90/Island") "Louca90/Island-" else it } ?: "Louca90/Island-",
+            guideSeen = sp.getBoolean("guideSeen", false),
+        )
+    }
+
+    private lateinit var appCtx: Context
+
+    fun exportJson(): String {
+        val o = org.json.JSONObject()
+        sp.all.forEach { (k, v) ->
+            when (v) {
+                is Set<*> -> o.put(k, org.json.JSONArray(v.toList()))
+                is Float -> o.put(k, org.json.JSONObject().put("f", v.toDouble()))
+                else -> o.put(k, v)
+            }
+        }
+        return o.toString(2)
+    }
+
+    fun importJson(txt: String): Boolean = runCatching {
+        val o = org.json.JSONObject(txt)
+        val e = sp.edit().clear()
+        o.keys().forEach { k ->
+            when (val v = o.get(k)) {
+                is org.json.JSONArray -> e.putStringSet(k, (0 until v.length()).map { v.getString(it) }.toSet())
+                is org.json.JSONObject -> e.putFloat(k, v.getDouble("f").toFloat())
+                is Boolean -> e.putBoolean(k, v)
+                is Int -> e.putInt(k, v)
+                is Long -> e.putInt(k, v.toInt())
+                is String -> e.putString(k, v)
+                is Double -> e.putFloat(k, v.toFloat())
+            }
+        }
+        e.commit()
+        init(appCtx)
+    }.isSuccess
+
+    fun update(f: (Settings) -> Settings) {
+        val n = f(state.value)
+        state.value = n
+        sp.edit()
+            .putInt("theme", n.theme.ordinal).putInt("color", n.color)
+            .putFloat("offY", n.offsetY).putFloat("offX", n.offsetX)
+            .putFloat("pillH", n.pillH).putFloat("pillW", n.pillW).putFloat("expW", n.expW)
+            .putBoolean("idle", n.showIdle).putBoolean("lock", n.lockAnim)
+            .putBoolean("peek", n.peekNotifs).putBoolean("fs", n.hideFullscreen)
+            .putBoolean("shade", n.hideShade)
+            .putBoolean("camMask", n.camMask).putFloat("camSize", n.camSize).putBoolean("camGuide", n.camGuide)
+            .putBoolean("nav", n.showNav).putBoolean("live", n.showLive).putBoolean("sys", n.showSystem)
+            .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
+            .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
+            .putBoolean("lyrics", n.showLyrics).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
+            .apply()
+    }
+}
+
+enum class Kind(val prio: Int) {
+    INBOX(0), MUSIC(1), LIVE(2), TIMER(2), EVENT(2), RECORD(3), NAV(4),
+    CHARGE(5), SYSTEM(5), AUDIO(5), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
+}
+
+data class Lyrics(val key: String, val lines: List<Pair<Long, String>>)
+
+fun sendPending(pi: PendingIntent?, fill: android.content.Intent? = null): Boolean {
+    if (pi == null) return false
+    val ctx = IslandStore.appContext
+    val opts = android.app.ActivityOptions.makeBasic()
+    if (android.os.Build.VERSION.SDK_INT >= 34) {
+        @Suppress("DEPRECATION")
+        opts.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+    }
+    return runCatching { pi.send(ctx, 0, fill, null, null, null, opts.toBundle()) }.isSuccess
+}
+
+class ActBtn(
+    val label: String,
+    val intent: PendingIntent?,
+    val inputs: Array<android.app.RemoteInput>? = null,
+    val onReply: ((String) -> Unit)? = null,
+    val onClick: (() -> Unit)? = null,
+) {
+    val isReply get() = !inputs.isNullOrEmpty() || onReply != null
+
+    fun fire(text: String? = null) {
+        if (text != null && onReply != null) { onReply.invoke(text); return }
+        onClick?.let { it(); return }
+        val fill = if (text != null && !inputs.isNullOrEmpty()) {
+            android.content.Intent().also { i ->
+                val b = android.os.Bundle()
+                inputs.forEach { b.putCharSequence(it.resultKey, text) }
+                android.app.RemoteInput.addResultsToIntent(inputs, i, b)
+            }
+        } else null
+        sendPending(intent, fill)
+    }
+}
+
+data class Act(
+    val id: String,
+    val kind: Kind,
+    val key: String = "",
+    val pkg: String = "",
+    val appName: String = "",
+    val title: String = "",
+    val text: String = "",
+    val icon: Bitmap? = null,
+    val appIcon: Bitmap? = null,
+    val art: Bitmap? = null,
+    val accent: Int = 0,
+    val playing: Boolean = false,
+    val position: Long = 0,
+    val posUpdatedAt: Long = 0,
+    val speed: Float = 1f,
+    val duration: Long = 0,
+    val base: Long = 0,
+    val chrono: Boolean = false,
+    val countDown: Boolean = false,
+    val timeText: String = "",
+    val incoming: Boolean = false,
+    val level: Int = 0,
+    val unlocked: Boolean = false,
+    val actions: List<ActBtn> = emptyList(),
+    val contentIntent: PendingIntent? = null,
+    val sub: String = "",
+    val short: String = "",
+    val progress: Float = -1f,
+    val variant: Int = 0,
+    val teamA: String = "",
+    val teamB: String = "",
+    val score: String = "",
+    val liked: Boolean? = null,
+    val shuffle: Boolean? = null,
+    val stamp: Long = System.currentTimeMillis(),
+) {
+    val urgent get() = kind == Kind.CALL || kind == Kind.NOTIF || kind == Kind.CHARGE || kind == Kind.LOCK ||
+        kind == Kind.SYSTEM || kind == Kind.OTP || kind == Kind.ALARM || kind == Kind.AUDIO
+    val lyricsKey get() = "$title|$text"
+    val isSport get() = score.isNotEmpty()
+
+    fun livePosition(): Long =
+        if (playing) position + ((SystemClock.elapsedRealtime() - posUpdatedAt) * speed).toLong() else position
+
+    fun open() {
+        val sys = when (kind) {
+            Kind.CHARGE -> android.content.Intent(android.content.Intent.ACTION_POWER_USAGE_SUMMARY)
+            Kind.SYSTEM -> android.content.Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)
+            else -> null
+        }
+        if (sys != null && contentIntent == null) {
+            runCatching { IslandStore.appContext.startActivity(sys.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            return
+        }
+        if (!sendPending(contentIntent)) {
+            val ctx = IslandStore.appContext
+            ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { ctx.startActivity(it) }
+            }
+        }
+    }
+
+    fun ago(): String {
+        val m = (System.currentTimeMillis() - stamp) / 60000
+        return when { m < 1 -> "maintenant"; m < 60 -> "$m min"; m < 1440 -> "${m / 60} h"; else -> "${m / 1440} j" }
+    }
+}
+
+object IslandStore {
+    lateinit var appContext: Context
+    private val scope = MainScope()
+    private val timers = mutableMapOf<String, Job>()
+
+    val acts = MutableStateFlow<List<Act>>(emptyList())
+    val pick = MutableStateFlow<String?>(null)
+    val expanded = MutableStateFlow(false)
+    val swipeDir = MutableStateFlow(0)
+    val wallTick = MutableStateFlow(0)
+
+    val lyrics = MutableStateFlow<Lyrics?>(null)
+    val lyricsOpen = MutableStateFlow(false)
+
+    fun copyOtp(a: Act) {
+        val cm = appContext.getSystemService(android.content.ClipboardManager::class.java)
+        runCatching { cm.setPrimaryClip(android.content.ClipData.newPlainText("code", a.short)) }
+        upsert(a.copy(title = "Copié", variant = 1), ttl = 1400)
+    }
+
+    // ---- notification inbox (newest first)
+    val notifs = MutableStateFlow<List<Act>>(emptyList())
+    val inboxIndex = MutableStateFlow(0)
+    val replying = MutableStateFlow<String?>(null)
+    var cancelNotif: ((String) -> Unit)? = null
+
+    private fun syncInbox() {
+        val l = notifs.value
+        inboxIndex.value = inboxIndex.value.coerceIn(0, (l.size - 1).coerceAtLeast(0))
+        if (l.isEmpty()) remove("inbox")
+        else upsert(Act(id = "inbox", kind = Kind.INBOX, title = "${l.size}", appIcon = l.first().appIcon, icon = l.first().icon,
+            level = l.size, stamp = 0))
+    }
+
+    fun putNotif(a: Act) {
+        notifs.update { l -> (listOf(a) + l.filterNot { it.key == a.key }).take(60) }
+        inboxIndex.value = 0
+        syncInbox()
+    }
+
+    fun dropNotif(key: String) {
+        notifs.update { l -> l.filterNot { it.key == key } }
+        if (replying.value == key) replying.value = null
+        syncInbox()
+    }
+
+    fun dismissNotif(key: String) {
+        cancelNotif?.invoke(key)
+        dropNotif(key)
+        acts.value.find { it.kind == Kind.NOTIF && it.key == key }?.let { remove(it.id) }
+    }
+
+    fun currentNotif(): Act? = notifs.value.getOrNull(inboxIndex.value)
+
+    var media: MediaController? = null
+    var compat: android.support.v4.media.session.MediaControllerCompat? = null
+    var likeAction: String? = null
+    var shuffleAction: String? = null
+
+    fun upsert(a: Act, ttl: Long = 0) {
+        acts.update { l ->
+            val old = l.find { it.id == a.id }
+            l.filterNot { it.id == a.id } + (if (old != null) a.copy(stamp = old.stamp) else a)
+        }
+        timers.remove(a.id)?.cancel()
+        if (ttl > 0) timers[a.id] = scope.launch { delay(ttl); remove(a.id) }
+    }
+
+    fun extend(id: String, ttl: Long) {
+        if (acts.value.none { it.id == id }) return
+        timers.remove(id)?.cancel()
+        timers[id] = scope.launch { delay(ttl); remove(id) }
+    }
+
+    fun remove(id: String) {
+        timers.remove(id)?.cancel()
+        acts.update { l -> l.filterNot { it.id == id } }
+        if (acts.value.none { !it.urgent }) expanded.value = false
+    }
+
+    fun removeIf(p: (Act) -> Boolean) {
+        acts.value.filter(p).forEach { remove(it.id) }
+    }
+
+    fun clear() {
+        timers.values.forEach { it.cancel() }; timers.clear()
+        acts.value = emptyList(); expanded.value = false
+        notifs.value = emptyList(); replying.value = null; inboxIndex.value = 0
+    }
+
+    fun primary(l: List<Act>, pk: String?): Act? {
+        l.filter { it.urgent }.maxWithOrNull(compareBy({ it.kind.prio }, { it.stamp }))?.let { return it }
+        l.find { it.id == pk }?.let { return it }
+        return l.maxWithOrNull(compareBy({ it.kind.prio }, { it.stamp }))
+    }
+
+    fun others(l: List<Act>, p: Act?): List<Act> =
+        l.filter { it.id != p?.id && !it.urgent }.sortedByDescending { it.kind.prio }.take(3)
+
+    fun cycle(dir: Int) {
+        val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }
+        if (l.size < 2) return
+        val cur = primary(acts.value, pick.value)
+        val i = l.indexOfFirst { it.id == cur?.id }.coerceAtLeast(0)
+        swipeDir.value = dir
+        pick.value = l[(i + dir + l.size) % l.size].id
+        expanded.value = false
+    }
+
+    fun select(id: String) {
+        val cur = primary(acts.value, pick.value)
+        val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }
+        val a = l.indexOfFirst { it.id == cur?.id }
+        val b = l.indexOfFirst { it.id == id }
+        swipeDir.value = if (b >= a) 1 else -1
+        pick.value = id
+        expanded.value = false
+    }
+
+    // ---- media controls ----
+    fun playPause() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) {
+            upsert(m.copy(playing = !m.playing, position = m.livePosition(), posUpdatedAt = SystemClock.elapsedRealtime()))
+            return
+        }
+        media?.transportControls?.let { if (m.playing) it.pause() else it.play() }
+    }
+
+    fun next() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) { upsert(m.copy(position = 0, posUpdatedAt = SystemClock.elapsedRealtime())); return }
+        media?.transportControls?.skipToNext()
+    }
+
+    fun prev() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) { upsert(m.copy(position = 0, posUpdatedAt = SystemClock.elapsedRealtime())); return }
+        media?.transportControls?.skipToPrevious()
+    }
+
+    fun toggleLike() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        val now = !(m.liked ?: false)
+        if (m.pkg != DEMO) likeAction?.let { media?.transportControls?.sendCustomAction(it, null) } ?: return
+        upsert(m.copy(liked = now))
+    }
+
+    fun toggleShuffle() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        val now = !(m.shuffle ?: false)
+        if (m.pkg != DEMO) {
+            val c = compat
+            val mode = c?.shuffleMode ?: -1
+            if (c != null && mode >= 0) {
+                c.transportControls.setShuffleMode(
+                    if (now) android.support.v4.media.session.PlaybackStateCompat.SHUFFLE_MODE_ALL
+                    else android.support.v4.media.session.PlaybackStateCompat.SHUFFLE_MODE_NONE
+                )
+            } else shuffleAction?.let { media?.transportControls?.sendCustomAction(it, null) } ?: return
+        }
+        upsert(m.copy(shuffle = now))
+    }
+
+    fun seek(ms: Long) {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) { upsert(m.copy(position = ms, posUpdatedAt = SystemClock.elapsedRealtime())); return }
+        media?.transportControls?.seekTo(ms)
+    }
+
+    const val DEMO = "demo"
+}

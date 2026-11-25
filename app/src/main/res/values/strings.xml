@@ -1,0 +1,3 @@
+<resources>
+    <string name="a11y_desc">Affiche l\'Island par-dessus la barre d\'état (musique, notifications, chrono, enregistrement d\'écran, appels). Aucune donnée n\'est lue ni envoyée.</string>
+</resources>
