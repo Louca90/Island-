@@ -51,6 +51,8 @@ data class Settings(
     val showBuds: Boolean = true,
     val showLyrics: Boolean = true,
     val showShots: Boolean = true,
+    val showConn: Boolean = true,
+    val showPay: Boolean = true,
     val updateRepo: String = "",
     val guideSeen: Boolean = false,
     /** Dead zones along the status bar: (start dp from the left edge, width dp). */
@@ -105,6 +107,8 @@ object Prefs {
             showBuds = sp.getBoolean("buds", true),
             showLyrics = sp.getBoolean("lyrics", true),
             showShots = sp.getBoolean("shots", true),
+            showConn = sp.getBoolean("conn", true),
+            showPay = sp.getBoolean("pay", true),
             updateRepo = sp.getString("repo", "Louca90/Island-")?.let { if (it == "Louca90/Island") "Louca90/Island-" else it } ?: "Louca90/Island-",
             guideSeen = sp.getBoolean("guideSeen", false),
             deadZones = parseZones(sp.getString("dz", "")),
@@ -162,7 +166,7 @@ object Prefs {
             .putBoolean("nav", n.showNav).putBoolean("live", n.showLive).putBoolean("sys", n.showSystem)
             .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
-            .putBoolean("lyrics", n.showLyrics).putBoolean("shots", n.showShots).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
+            .putBoolean("lyrics", n.showLyrics).putBoolean("shots", n.showShots).putBoolean("conn", n.showConn).putBoolean("pay", n.showPay).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
             .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones).putBoolean("standby", n.standbyOnCharge)
             .putBoolean("standbyWireless", n.standbyWirelessOnly).putBoolean("standbyLock", n.standbyLockOnly)
             .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })
@@ -172,7 +176,7 @@ object Prefs {
 
 enum class Kind(val prio: Int) {
     INBOX(0), MUSIC(1), LIVE(2), TIMER(2), EVENT(2), TORCH(3), RECORD(3), NAV(4),
-    CHARGE(5), SYSTEM(5), AUDIO(5), SHOT(5), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
+    CHARGE(5), SYSTEM(5), AUDIO(5), SHOT(5), PAY(7), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
 }
 
 data class Lyrics(val key: String, val lines: List<Pair<Long, String>>)
@@ -252,7 +256,7 @@ data class Act(
     val stamp: Long = System.currentTimeMillis(),
 ) {
     val urgent get() = kind == Kind.CALL || kind == Kind.NOTIF || kind == Kind.CHARGE || kind == Kind.LOCK ||
-        kind == Kind.SYSTEM || kind == Kind.OTP || kind == Kind.ALARM || kind == Kind.AUDIO || kind == Kind.SHOT
+        kind == Kind.SYSTEM || kind == Kind.OTP || kind == Kind.ALARM || kind == Kind.AUDIO || kind == Kind.SHOT || kind == Kind.PAY
     val lyricsKey get() = "$title|$text"
     val isSport get() = score.isNotEmpty()
 
@@ -262,7 +266,14 @@ data class Act(
     fun open() {
         val sys = when (kind) {
             Kind.CHARGE -> android.content.Intent(android.content.Intent.ACTION_POWER_USAGE_SUMMARY)
-            Kind.SYSTEM -> android.content.Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)
+            Kind.SYSTEM -> when (variant) {
+                7, 8 -> android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                9, 10 -> android.content.Intent(android.provider.Settings.ACTION_AIRPLANE_MODE_SETTINGS)
+                11, 12 -> android.content.Intent("android.settings.TETHER_SETTINGS")
+                13, 14 -> android.content.Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS)
+                else -> android.content.Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)
+            }
+            Kind.PAY -> IslandStore.appContext.packageManager.getLaunchIntentForPackage(pkg)
             else -> null
         }
         if (sys != null && contentIntent == null) {
@@ -396,6 +407,11 @@ object IslandStore {
 
     private val statusJobs = mutableMapOf<String, Job>()
 
+    /** Apps able to pay contactless (they declare a card-emulation service) + the default wallet. */
+    @Volatile var payPkgs: Set<String> = emptySet()
+    /** Last time a contactless app was on screen: a payment notification right after it is a payment. */
+    @Volatile var payContextAt = 0L
+
     /**
      * Status pop-ups (sound mode, charging, low battery, earbuds, screenshot):
      * large for [bigMs] and impossible to dismiss, then small for [smallMs], then gone.
@@ -444,8 +460,11 @@ object IslandStore {
             .sortedWith(compareByDescending<Act> { it.kind == Kind.INBOX }.thenByDescending { it.kind.prio })
             .take(3)
 
+    /** Live activities you swipe between (notifications keep their own bubble). */
+    private fun swipeable() = acts.value.filterNot { it.urgent || it.kind == Kind.INBOX }.sortedBy { it.kind.prio }
+
     fun cycle(dir: Int) {
-        val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }
+        val l = swipeable()
         if (l.size < 2) return
         val cur = primary(acts.value, pick.value)
         val i = l.indexOfFirst { it.id == cur?.id }.coerceAtLeast(0)
@@ -456,7 +475,7 @@ object IslandStore {
 
     /** The activity a horizontal swipe would bring in ([dir] = 1: from the right). */
     fun neighbor(dir: Int): Act? {
-        val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }
+        val l = swipeable()
         if (l.size < 2) return null
         val cur = primary(acts.value, pick.value) ?: return null
         val i = l.indexOfFirst { it.id == cur.id }

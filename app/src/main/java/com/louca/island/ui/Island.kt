@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.louca.island.ui
 
 import android.app.WallpaperManager
@@ -180,11 +182,35 @@ fun maskExtra(s: Settings): Dp =
 
 fun notifH(a: Act): Dp = (100 + (if (a.actions.isNotEmpty()) 52 else 0)).dp
 
+val LocalShared = androidx.compose.runtime.compositionLocalOf<androidx.compose.animation.SharedTransitionScope?> { null }
+val LocalAvs = androidx.compose.runtime.compositionLocalOf<androidx.compose.animation.AnimatedVisibilityScope?> { null }
+
+/**
+ * Marks a piece of content that exists both closed and open (cover, icon, clock…): when the island
+ * opens or closes it morphs from one place/size to the other instead of being swapped, while the rest
+ * of the content melts through a blur.
+ */
+@OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@Composable
+private fun Modifier.shared(key: String): Modifier {
+    val st = LocalShared.current ?: return this
+    val avs = LocalAvs.current ?: return this
+    return with(st) {
+        this@shared.sharedBounds(
+            rememberSharedContentState(key), avs,
+            enter = fadeIn(tween(220, 40)), exit = fadeOut(tween(160)),
+            boundsTransform = androidx.compose.animation.BoundsTransform { _, _ -> spring(1f, 420f) },
+            resizeMode = androidx.compose.animation.SharedTransitionScope.ResizeMode.ScaleToBounds(ContentScale.Fit, Alignment.Center),
+        )
+    }
+}
+
 /** Status pop-ups are large during their first phase, whatever the user does. */
 fun isBig(a: Act?): Boolean = a != null && a.bigUntil > System.currentTimeMillis()
 
 fun isExpanded(a: Act?, flag: Boolean): Boolean = when (a?.kind) {
     Kind.CHARGE, Kind.SYSTEM, Kind.AUDIO, Kind.SHOT -> isBig(a)
+    Kind.PAY -> if (a?.variant == 1) isBig(a) else flag
     null, Kind.LOCK, Kind.OTP -> false
     Kind.NOTIF, Kind.ALARM -> true
     Kind.CALL -> a.incoming || flag
@@ -225,7 +251,14 @@ fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp, zones: List<Pair<Float, 
         Kind.EVENT -> if (ex) Spec(big, 88.dp, 40.dp) else pill(184f)
         Kind.AUDIO -> if (ex) Spec(big, 84.dp, 40.dp) else pill(240f)
         Kind.LOCK -> pill(128f)
-        Kind.SYSTEM -> if (ex) Spec(big, 84.dp, 40.dp) else pill(204f)
+        Kind.SYSTEM -> if (ex) Spec(big, 84.dp, 40.dp) else pill(if (a.variant in 7..16) 236f else 204f)
+        Kind.PAY -> when {
+            ex && a.variant == 1 -> Spec(big, 84.dp, 40.dp)
+            ex -> Spec(big, 132.dp, 40.dp)
+            a.variant == 1 -> pill(250f)
+            a.variant == 2 -> pill(262f)
+            else -> pill(316f)
+        }
         Kind.NAV -> if (ex) Spec(big, 92.dp, 40.dp) else pill(196f)
         Kind.LIVE -> if (ex) Spec(big, if (a.isSport) 92.dp else if (a.progress != -1f) 112.dp else 92.dp, 40.dp) else pill(200f)
     }
@@ -265,7 +298,9 @@ fun IslandRoot(
     val lyrOpen by IslandStore.lyricsOpen.collectAsState()
     lyr?.key; lyrOpen
     notifList.size + inboxIdx + (replyKey?.length ?: 0)
-    val bubbles = if (primary?.kind == Kind.NOTIF) emptyList() else IslandStore.others(acts, primary)
+    val others = if (primary?.kind == Kind.NOTIF) emptyList() else IslandStore.others(acts, primary)
+    // notifications keep their little bubble; live activities stack behind the pill instead
+    val bubbles = others.filter { it.kind == Kind.INBOX }
     val sp = spec(primary, expandedFlag, s, maxW, zones)
     val h0 = compactH(s)
     val visible = !hidden && (primary != null || s.showIdle)
@@ -322,6 +357,8 @@ fun IslandRoot(
     val nextR = remember(acts, pick) { IslandStore.neighbor(1) }
     val nextL = remember(acts, pick) { IslandStore.neighbor(-1) }
     val follow = !ex && primary != null && !primary.urgent && !isBig(primary)
+    // the activity waiting behind the pill: the one a swipe to the left brings in
+    val back = if (ex || !visible) null else if (follow) nextR else others.firstOrNull { it.kind != Kind.INBOX }
     val settled = swipeTarget != null && primary?.id == swipeTarget
     val off = if (settled) 0f else dragX.value
     val peek = when { off < 0 -> nextR; off > 0 -> nextL; else -> null }
@@ -343,7 +380,7 @@ fun IslandRoot(
     //     Grow at once, shrink once the animation has settled.
     val side = if (ex) 0f else bubbles.size * (h0.value + 6f)
     val zw = min(max(sp.w.value + side * 2, bubbles.size * (h0.value + 6f)) + 16f, maxW.value)
-    val zh = max(sp.h.value, h0.value) + 8f + if (ex && bubbles.isNotEmpty()) h0.value + 10f else 0f
+    val zh = max(sp.h.value, h0.value) + 8f + (if (ex && bubbles.isNotEmpty()) h0.value + 10f else 0f) + (if (back != null) 10f else 0f)
     var zone by remember { mutableStateOf(0f to 0f) }
     val zoneCb by rememberUpdatedState(onTouchZone)
     LaunchedEffect(zw, zh, visible) {
@@ -385,6 +422,35 @@ fun IslandRoot(
                     }
             )
         }
+        // ---- the stack: the next live activity waits right behind the pill, smaller, its edge peeking out
+        //      below. Swiping towards it sinks it under the pill while its content slides in; the one that
+        //      left then drops back behind. Tap the edge to bring it forward. Max 2 pills visible.
+        val lastBack = remember { arrayOfNulls<Act>(1) }
+        if (back != null) lastBack[0] = back
+        val backIn by animateFloatAsState(if (back != null) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "bk")
+        val bk = back ?: lastBack[0]
+        if (bk != null && backIn > .01f) androidx.compose.runtime.key(bk.id) {
+            val toward = if (peek != null && peek.id == bk.id) prog else 0f
+            val bw = min(spec(bk, false, s, maxW, zones).w.value, w.value - 18f).coerceAtLeast(h0.value).dp
+            val drop = remember { Animatable(0f) }
+            LaunchedEffect(Unit) { drop.animateTo(1f, tween(380, 90, FastOutSlowInEasing)) }
+            val bkId = bk.id
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .graphicsLayer {
+                        val k = backIn * drop.value * (1f - toward)
+                        this.alpha = alpha * (.4f + .6f * k)
+                        scaleX = .9f - .04f * (1f - k); scaleY = .9f
+                        transformOrigin = TransformOrigin(.5f, 0f)
+                        translationY = (h0 * .1f + 6.dp).toPx() * k
+                    }
+                    .size(bw, h0)
+                    .clip(RoundedCornerShape(h0 / 2))
+                    .background(androidx.compose.ui.graphics.lerp(c.bg, c.fg, .16f))
+                    .pointerInput(bkId) { detectTapGestures { IslandStore.select(bkId) } }
+            )
+        }
         Box(
             Modifier
                 .align(Alignment.TopCenter)
@@ -420,6 +486,8 @@ fun IslandRoot(
                                 Kind.LOCK, Kind.CHARGE, Kind.ALARM, Kind.AUDIO, Kind.SYSTEM -> {}
                                 Kind.SHOT -> if (!isBig(p)) { viewShot(ctx, p); IslandStore.remove(p.id) }
                                 Kind.OTP -> IslandStore.copyOtp(p)
+                                Kind.PAY -> if (p.variant == 1) { if (!isBig(p)) { p.open(); IslandStore.remove(p.id) } }
+                                    else IslandStore.expanded.value = !IslandStore.expanded.value
                                 Kind.CALL -> if (!p.incoming) IslandStore.expanded.value = !IslandStore.expanded.value
                                 else -> IslandStore.expanded.value = !IslandStore.expanded.value
                             }
@@ -506,10 +574,14 @@ fun IslandRoot(
                 fxMode[1] = !swiped
                 prevKey[0] = key
             }
+            androidx.compose.animation.SharedTransitionLayout(
+                Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f }
+            ) {
+            val sharedScope = this
             AnimatedContent(
                 targetState = key,
                 contentAlignment = Alignment.TopCenter,
-                modifier = Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f },
+                modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
                     // After a finger swipe the new content is already on screen: swap with no transition at all.
                     // Decided once per change (fxMode), never re-read from live state: swipeTarget is cleared
@@ -579,10 +651,12 @@ fun IslandRoot(
                 ) {
                     if (a != null) androidx.compose.runtime.CompositionLocalProvider(
                         LocalIconPhase provides iconPhase, LocalIconStatic provides !iconFx,
+                        LocalShared provides sharedScope, LocalAvs provides (if (iconFx) this@AnimatedContent else null),
                     ) {
                         Content(a, k.ex, c, h0) { poke++ }
                     }
                 }
+            }
             }
             if (peek != null) {
                 Box(
@@ -725,6 +799,7 @@ private fun BubbleCore(a: Act, c: IslandColors, size: Dp, soft: Boolean, onTap: 
             Kind.EVENT -> CalendarIcon(c.fg, inner)
             Kind.TORCH -> FlashIcon(c.yellow, inner, on = true)
             Kind.SHOT -> ShotThumb(a, c, size * .62f)
+            Kind.PAY -> if (a.variant == 2) FingerprintIcon(c.fg, inner) else NfcIcon(c.fg, inner)
             Kind.NAV -> NavIcon(a, c, inner)
             Kind.LIVE -> when {
                 a.isSport -> T(a.score.replace(" ", ""), c.fg, 10, FontWeight.Bold, style = Num)
@@ -875,32 +950,32 @@ private fun AppAvatar(a: Act, size: Dp, c: IslandColors) {
 private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Unit) {
     when (a.kind) {
         Kind.MUSIC -> if (ex) MusicExpanded(a, c, poke) else CompactRow(h0, {
-            Crossfade(a.art, label = "art") { art ->
+            Crossfade(a.art, Modifier.shared("${a.id}:art"), label = "art") { art ->
                 if (art != null) Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop,
                     modifier = Modifier.size(h0 - 12.dp).clip(RoundedCornerShape(7.dp)))
                 else Box(Modifier.size(h0 - 12.dp).clip(RoundedCornerShape(7.dp)).background(c.btn))
             }
-        }, { Equalizer(a.playing, musicAccent(a, c), 18.dp, Modifier.padding(end = 5.dp)) })
+        }, { Equalizer(a.playing, musicAccent(a, c), 18.dp, Modifier.padding(end = 5.dp).shared("${a.id}:eq")) })
 
         Kind.TIMER -> if (ex) TimerExpanded(a, c, poke) else CompactRow(h0, {
             if (a.variant == 1) SmallAppIcon(a, c, h0 - 12.dp)
             else if (a.countDown) CountdownRing(a, c, 22.dp, Modifier.padding(start = 4.dp))
-            else StopwatchIcon(rememberSeconds(a), c.orange, 19.dp, Modifier.padding(start = 5.dp))
+            else StopwatchIcon(rememberSeconds(a), c.orange, 19.dp, Modifier.padding(start = 5.dp).shared("${a.id}:ic"))
         }, {
-            Roll(rememberClock(a, false), if (a.variant == 1) c.green else c.orange, 15, modifier = Modifier.padding(end = 6.dp))
+            Roll(rememberClock(a, false), if (a.variant == 1) c.green else c.orange, 15, modifier = Modifier.padding(end = 6.dp).shared("${a.id}:clk"))
         })
 
         Kind.RECORD -> if (ex) RecordExpanded(a, c) else CompactRow(h0, {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (a.variant == 1) {
-                    MicIcon(c.red, 18.dp, Modifier.padding(start = 5.dp))
+                    MicIcon(c.red, 18.dp, Modifier.padding(start = 5.dp).shared("${a.id}:ic"))
                 } else {
-                    ScreenRecIcon(c.red, 20.dp, Modifier.padding(start = 5.dp))
+                    ScreenRecIcon(c.red, 20.dp, Modifier.padding(start = 5.dp).shared("${a.id}:ic"))
                 }
             }
         }, {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Roll(rememberClock(a, false), c.fg, 14)
+                Roll(rememberClock(a, false), c.fg, 14, modifier = Modifier.shared("${a.id}:clk"))
                 Spacer(Modifier.width(8.dp))
                 Tap(h0 - 10.dp, "Arrêter l'enregistrement", { stopRecord(a) }) {
                     Box(Modifier.fillMaxSize().clip(CircleShape).background(c.red.copy(alpha = .2f)), contentAlignment = Alignment.Center) {
@@ -911,9 +986,9 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         })
 
         Kind.CALL -> if (ex) CallExpanded(a, c) else CompactRow(h0, {
-            HandsetIcon(c.green, 17.dp, modifier = Modifier.padding(start = 6.dp))
+            HandsetIcon(c.green, 17.dp, modifier = Modifier.padding(start = 6.dp).shared("${a.id}:ic"))
         }, {
-            Roll(rememberClock(a, false), c.green, 15, modifier = Modifier.padding(end = 7.dp))
+            Roll(rememberClock(a, false), c.green, 15, modifier = Modifier.padding(end = 7.dp).shared("${a.id}:clk"))
         })
 
         Kind.NOTIF -> NotifBody(a, c, poke, counter = null, onAction = { IslandStore.remove(a.id) })
@@ -934,13 +1009,13 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
 
         Kind.CHARGE -> if (ex) ChargeBig(a, c) else CompactRow(h0, {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                BoltIcon(c.green, 18.dp, Modifier.padding(start = 4.dp))
+                BoltIcon(c.green, 18.dp, Modifier.padding(start = 4.dp).shared("${a.id}:ic"))
                 if (a.sub.isBlank()) { Spacer(Modifier.width(5.dp)); T("En charge", c.fg, 13, FontWeight.Medium) }
             }
         }, {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 6.dp)) {
                 if (a.sub.isNotBlank()) { T(a.sub, c.dim, 12, style = Num); Spacer(Modifier.width(6.dp)) }
-                Roll("${a.level} %", c.green, 14)
+                Roll("${a.level} %", c.green, 14, modifier = Modifier.shared("${a.id}:pct"))
                 Spacer(Modifier.width(6.dp))
                 BatteryGlyph(a.level, c.fg, c.green, 24.dp)
             }
@@ -951,18 +1026,18 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         }, {})
 
         Kind.NAV -> if (ex) NavExpanded(a, c) else CompactRow(h0, {
-            Box(Modifier.padding(start = 6.dp)) { NavIcon(a, c, 20.dp) }
+            Box(Modifier.padding(start = 6.dp).shared("${a.id}:ic")) { NavIcon(a, c, 20.dp) }
         }, {
-            Roll(a.title, c.fg, 14, modifier = Modifier.padding(end = 6.dp))
+            Roll(a.title, c.fg, 14, modifier = Modifier.padding(end = 6.dp).shared("${a.id}:t"))
         })
 
         Kind.LIVE -> if (ex) LiveExpanded(a, c) else CompactRow(h0, {
-            SmallAppIcon(a, c, h0 - 12.dp)
+            Box(Modifier.shared("${a.id}:ic")) { SmallAppIcon(a, c, h0 - 12.dp) }
         }, {
             Box(Modifier.padding(end = 6.dp)) {
                 when {
                     a.isSport -> T(a.score, c.fg, 15, FontWeight.SemiBold, style = Num)
-                    a.short.isNotBlank() -> Roll(a.short, c.fg, 14)
+                    a.short.isNotBlank() -> Roll(a.short, c.fg, 14, modifier = Modifier.shared("${a.id}:s"))
                     a.progress != -1f -> ProgressRing(a.progress, c.fg, c.track, 20.dp)
                     else -> T(a.title, c.fg, 13, FontWeight.Medium)
                 }
@@ -998,7 +1073,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
 
         Kind.EVENT -> if (ex) {
             Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(50.dp).clip(RoundedCornerShape(15.dp)).background(c.btn), contentAlignment = Alignment.Center) {
+                Box(Modifier.shared("${a.id}:ic").size(50.dp).clip(RoundedCornerShape(15.dp)).background(c.btn), contentAlignment = Alignment.Center) {
                     CalendarIcon(c.fg, 26.dp)
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1009,14 +1084,14 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                 T(if (a.short == "maintenant") "maintenant" else "dans ${a.short}", c.fg, 14, FontWeight.SemiBold, style = Num)
             }
         } else CompactRow(h0, {
-            Box(Modifier.padding(start = 6.dp)) { CalendarIcon(c.fg, 18.dp) }
+            Box(Modifier.padding(start = 6.dp).shared("${a.id}:ic")) { CalendarIcon(c.fg, 18.dp) }
         }, {
             Roll(a.short, c.fg, 14, modifier = Modifier.padding(end = 7.dp))
         })
 
         Kind.AUDIO -> if (ex) AudioBig(a, c) else CompactRow(h0, {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 6.dp)) {
-                HeadphonesIcon(if (a.variant == 1) c.dim else c.fg, 18.dp)
+                HeadphonesIcon(if (a.variant == 1) c.dim else c.fg, 18.dp, Modifier.shared("${a.id}:ic"))
                 Spacer(Modifier.width(6.dp))
                 T(a.title, if (a.variant == 1) c.dim else c.fg, 13, FontWeight.Medium)
             }
@@ -1041,13 +1116,13 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         })
 
         Kind.SHOT -> if (ex) ShotBig(a, c) else CompactRow(h0, {
-            Box(Modifier.padding(start = 4.dp)) { ShotThumb(a, c, h0 - 10.dp) }
+            Box(Modifier.padding(start = 4.dp).shared("${a.id}:img")) { ShotThumb(a, c, h0 - 10.dp) }
         }, {
             T("Capture", c.fg, 13, FontWeight.SemiBold, modifier = Modifier.padding(end = 8.dp))
         })
 
         Kind.SYSTEM -> if (ex) SystemBig(a, c) else CompactRow(h0, {
-            Box(Modifier.padding(start = 5.dp)) {
+            Box(Modifier.padding(start = 5.dp).shared("${a.id}:ic")) {
                 when (a.variant) {
                     0 -> BellIcon(c.fg, 18.dp, ring = true)
                     1 -> VibrateIcon(c.fg, 20.dp)
@@ -1055,13 +1130,95 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                     3 -> MoonIcon(Color(0xFFBF5AF2), c.bg, 18.dp)
                     4 -> MoonIcon(c.dim, c.bg, 18.dp)
                     6 -> CheckIcon(c.green, 18.dp)
+                    in 7..16 -> ConnGlyph(a.variant, c, 18.dp)
                     else -> BatteryGlyph(a.level, c.fg, c.red, 22.dp)
                 }
             }
         }, {
-            T(a.title, if (a.variant == 2 || a.variant == 5) c.red else c.fg, 13, FontWeight.SemiBold,
-                modifier = Modifier.padding(end = 7.dp))
+            T(a.title, if (a.variant == 2 || a.variant == 5) c.red else if (a.variant in 7..16 && a.variant % 2 == 0) c.dim else c.fg,
+                13, FontWeight.SemiBold, maxLines = 1, modifier = Modifier.padding(end = 7.dp))
         })
+
+        Kind.PAY -> if (ex) PayBig(a, c) else CompactRow(h0, {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 7.dp)) {
+                when (a.variant) {
+                    1 -> Box(Modifier.shared("${a.id}:ic").size(20.dp).clip(CircleShape).background(c.green), contentAlignment = Alignment.Center) { CheckIcon(c.bg, 12.dp) }
+                    2 -> FingerprintIcon(c.fg, 19.dp, Modifier.shared("${a.id}:ic"))
+                    else -> NfcIcon(c.fg, 18.dp, Modifier.shared("${a.id}:ic"))
+                }
+                Spacer(Modifier.width(7.dp))
+                T(when (a.variant) { 1 -> "Payé"; 2 -> "Empreinte"; else -> "Pay" }, c.fg, 14, FontWeight.SemiBold)
+            }
+        }, {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 7.dp)) {
+                when (a.variant) {
+                    1 -> Roll(a.title, c.green, 15, modifier = Modifier.shared("${a.id}:amt"))
+                    2 -> T("Posez le doigt", c.dim, 12)
+                    else -> {
+                        T(a.title, if (a.level == 0) c.red else c.dim, 11, maxLines = 1)
+                        Spacer(Modifier.width(6.dp))
+                        CardChip(payColor(a, c), 22.dp, Modifier.shared("${a.id}:card"))
+                    }
+                }
+            }
+        })
+    }
+}
+
+@Composable
+private fun ConnGlyph(v: Int, c: IslandColors, size: Dp) = when (v) {
+    7 -> WifiIcon(c.fg, size)
+    8 -> WifiIcon(c.dim, size, on = false)
+    9 -> AirplaneIcon(c.orange, size)
+    10 -> AirplaneIcon(c.dim, size)
+    11 -> HotspotIcon(c.fg, size)
+    12 -> HotspotIcon(c.dim, size)
+    13 -> LeafIcon(c.green, size)
+    14 -> LeafIcon(c.dim, size)
+    15 -> ModeIcon(c.fg, size)
+    else -> ModeIcon(c.dim, size)
+}
+
+private fun payColor(a: Act, c: IslandColors): Color =
+    if (a.accent != 0) Color(a.accent) else Color(0xFFFFD60A)
+
+/** Contactless payment, open: wallet, card, and the two things you may want to do. Paid: a receipt. */
+@Composable
+private fun PayBig(a: Act, c: IslandColors) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    if (a.variant == 1) {
+        StatusBig(c, c.green, {
+            Box(Modifier.size(30.dp).clip(CircleShape).background(c.green), contentAlignment = Alignment.Center) { CheckIcon(c.bg, 18.dp) }
+        }, "Paiement accepté", a.sub.ifBlank { a.appName }, key = "${a.id}:ic") {
+            Roll(a.title, c.green, 22, modifier = Modifier.shared("${a.id}:amt"))
+        }
+        return
+    }
+    fun go(i: android.content.Intent) = runCatching { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    val nfcOff = a.level == 0
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.SpaceBetween) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.shared("${a.id}:ic").size(44.dp).clip(CircleShape).background(c.btn), contentAlignment = Alignment.Center) {
+                if (a.variant == 2) FingerprintIcon(c.fg, 28.dp) else NfcIcon(c.fg, 26.dp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                T(if (a.variant == 2) "Posez votre doigt" else a.title, if (nfcOff) c.red else c.fg, 16, FontWeight.SemiBold, maxLines = 1)
+                T(if (a.variant == 2) "Empreinte requise · ${a.appName}" else a.appName, c.dim, 13, maxLines = 1)
+            }
+            if (a.pkg.isNotBlank()) CardChip(payColor(a, c), 46.dp, Modifier.shared("${a.id}:card"))
+        }
+        if (a.pkg.isNotBlank()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShotBtn("Changer de carte", c.btn, c.fg, Modifier.weight(1f)) {
+                ctx.packageManager.getLaunchIntentForPackage(a.pkg)?.let { go(it) }
+                IslandStore.expanded.value = false
+            }
+            ShotBtn(if (nfcOff) "Activer le NFC" else "App par défaut", if (nfcOff) c.red.copy(alpha = .2f) else c.btn,
+                if (nfcOff) c.red else c.fg, Modifier.weight(1f)) {
+                go(android.content.Intent(if (nfcOff) android.provider.Settings.ACTION_NFC_SETTINGS else android.provider.Settings.ACTION_NFC_PAYMENT_SETTINGS))
+                IslandStore.expanded.value = false
+            }
+        }
     }
 }
 
@@ -1069,9 +1226,9 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
 
 @Composable
 private fun StatusBig(c: IslandColors, tint: Color, icon: @Composable () -> Unit, title: String, sub: String,
-                      titleColor: Color = c.fg, end: @Composable () -> Unit = {}) {
+                      titleColor: Color = c.fg, key: String = "", end: @Composable () -> Unit = {}) {
     Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(50.dp).clip(CircleShape).background(tint.copy(alpha = .18f)), contentAlignment = Alignment.Center) { icon() }
+        Box((if (key.isNotEmpty()) Modifier.shared(key) else Modifier).size(50.dp).clip(CircleShape).background(tint.copy(alpha = .18f)), contentAlignment = Alignment.Center) { icon() }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             T(title, titleColor, 16, FontWeight.SemiBold)
@@ -1091,6 +1248,16 @@ private fun SystemBig(a: Act, c: IslandColors) {
         3 -> purple to "Appels et notifications en sourdine"
         4 -> c.fg to "Ne pas déranger désactivé"
         6 -> c.green to ""
+        7 -> c.fg to (a.sub.ifBlank { "Connecté au réseau" })
+        8 -> c.dim to "Plus de connexion Wi-Fi"
+        9 -> c.orange to "Réseaux mobiles et Wi-Fi coupés"
+        10 -> c.dim to "Réseaux mobiles réactivés"
+        11 -> c.fg to "Votre connexion est partagée"
+        12 -> c.dim to "Partage de connexion arrêté"
+        13 -> c.green to "Performances réduites, autonomie prolongée"
+        14 -> c.dim to "Performances normales"
+        15 -> c.fg to (a.sub.ifBlank { "Mode activé" })
+        16 -> c.dim to "Retour au réglage habituel"
         else -> c.red to "Branchez le chargeur"
     }
     val title = if (a.variant == 5) "Batterie faible" else a.title
@@ -1102,9 +1269,10 @@ private fun SystemBig(a: Act, c: IslandColors) {
             3 -> MoonIcon(purple, c.bg, 26.dp)
             4 -> MoonIcon(c.dim, c.bg, 26.dp)
             6 -> CheckIcon(c.green, 26.dp)
+            in 7..16 -> ConnGlyph(a.variant, c, 26.dp)
             else -> BatteryGlyph(a.level, c.fg, c.red, 30.dp)
         }
-    }, title, sub, if (a.variant == 2 || a.variant == 5) c.red else c.fg) {
+    }, title, sub, if (a.variant == 2 || a.variant == 5) c.red else c.fg, key = "${a.id}:ic") {
         if (a.variant == 5) Roll("${a.level} %", c.red, 22)
     }
 }
@@ -1116,14 +1284,14 @@ private fun ChargeBig(a: Act, c: IslandColors) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.Center) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(CircleShape).background(c.green.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
-                BoltIcon(c.green, 22.dp)
+                BoltIcon(c.green, 22.dp, Modifier.shared("${a.id}:ic"))
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 T(a.title.ifBlank { "En charge" }, c.fg, 16, FontWeight.SemiBold)
                 T(a.sub.ifBlank { if (a.variant == 1) "Chargeur à induction" else "Câble branché" }, c.dim, 13)
             }
-            Roll("${a.level} %", c.green, 24)
+            Roll("${a.level} %", c.green, 24, modifier = Modifier.shared("${a.id}:pct"))
         }
         Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(c.track)) {
@@ -1136,7 +1304,7 @@ private fun ChargeBig(a: Act, c: IslandColors) {
 private fun AudioBig(a: Act, c: IslandColors) {
     val off = a.variant == 1
     StatusBig(c, if (off) c.dim else c.fg, { HeadphonesIcon(if (off) c.dim else c.fg, 26.dp) }, a.title,
-        if (off) "Déconnecté" else if (a.level >= 0) "Connecté · batterie" else "Connecté") {
+        if (off) "Déconnecté" else if (a.level >= 0) "Connecté · batterie" else "Connecté", key = "${a.id}:ic") {
         if (!off && a.level >= 0) Row(verticalAlignment = Alignment.CenterVertically) {
             Roll("${a.level} %", if (a.level <= 20) c.red else c.green, 20)
             Spacer(Modifier.width(6.dp))
@@ -1171,7 +1339,7 @@ private fun ShotBig(a: Act, c: IslandColors) {
         ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
     Row(Modifier.fillMaxSize().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+        Box(Modifier.shared("${a.id}:img").graphicsLayer { scaleX = pop.value; scaleY = pop.value }
             .pointerInput(a.uri) { detectTapGestures { viewShot(ctx, a); IslandStore.remove(a.id) } }) {
             ShotThumb(a, c, 108.dp)
         }
@@ -1266,12 +1434,12 @@ private fun LiveBar(progress: Float, c: IslandColors, color: Color) {
 @Composable
 private fun NavExpanded(a: Act, c: IslandColors) {
     Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(54.dp).clip(RoundedCornerShape(16.dp)).background(c.btn), contentAlignment = Alignment.Center) {
+        Box(Modifier.shared("${a.id}:ic").size(54.dp).clip(RoundedCornerShape(16.dp)).background(c.btn), contentAlignment = Alignment.Center) {
             NavIcon(a, c, 32.dp)
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            T(a.title, c.fg, 22, FontWeight.SemiBold)
+            T(a.title, c.fg, 22, FontWeight.SemiBold, modifier = Modifier.shared("${a.id}:t"))
             T(a.text, c.dim, 14)
             if (a.sub.isNotBlank()) T(a.sub, c.dim, 12)
         }
@@ -1294,7 +1462,7 @@ private fun LiveExpanded(a: Act, c: IslandColors) {
     }
     Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AppAvatar(a, 40.dp, c)
+            Box(Modifier.shared("${a.id}:ic")) { AppAvatar(a, 40.dp, c) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 T(a.appName + if (a.sub.isNotBlank()) " · ${a.sub}" else "", c.dim, 12)
@@ -1302,7 +1470,7 @@ private fun LiveExpanded(a: Act, c: IslandColors) {
                 if (a.text.isNotBlank()) T(a.text, c.fg.copy(alpha = .86f), 13)
             }
             if (a.short.isNotBlank()) {
-                Spacer(Modifier.width(8.dp)); T(a.short, c.fg, 17, FontWeight.SemiBold, style = Num)
+                Spacer(Modifier.width(8.dp)); T(a.short, c.fg, 17, FontWeight.SemiBold, style = Num, modifier = Modifier.shared("${a.id}:s"))
             }
         }
         if (a.progress != -1f) {
@@ -1327,7 +1495,7 @@ private fun MusicExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Crossfade(a.art, label = "artx") { art ->
+            Crossfade(a.art, Modifier.shared("${a.id}:art"), label = "artx") { art ->
                 if (art != null) Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop,
                     modifier = Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)))
                 else Box(Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)).background(c.btn))
@@ -1356,7 +1524,7 @@ private fun MusicExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
                 }
             }
             Spacer(Modifier.width(4.dp))
-            Equalizer(a.playing, accent, 20.dp)
+            Equalizer(a.playing, accent, 20.dp, Modifier.shared("${a.id}:eq"))
         }
         val ly by IslandStore.lyrics.collectAsState()
         val lyOpen by IslandStore.lyricsOpen.collectAsState()
@@ -1435,12 +1603,12 @@ private fun TimerExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
     Row(Modifier.fillMaxSize().padding(start = 22.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (a.countDown) HourglassIcon(c.orange, 14.dp) else StopwatchIcon(rememberSeconds(a), c.orange, 14.dp)
+                if (a.countDown) HourglassIcon(c.orange, 14.dp) else StopwatchIcon(rememberSeconds(a), c.orange, 14.dp, Modifier.shared("${a.id}:ic"))
                 Spacer(Modifier.width(6.dp))
                 T(a.title.ifBlank { if (a.countDown) "Minuteur" else a.appName }, c.dim, 12)
             }
             val clk = rememberClock(a, a.chrono && !a.countDown)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.shared("${a.id}:clk"), verticalAlignment = Alignment.CenterVertically) {
                 // the tenths run too fast to roll: only the seconds and up roll
                 Roll(clk.substringBefore(','), c.orange, 34, FontWeight.Medium)
                 if (',' in clk) T("," + clk.substringAfter(','), c.orange, 34, FontWeight.Medium, style = Num)
@@ -1472,12 +1640,12 @@ private fun TimerExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
 private fun RecordExpanded(a: Act, c: IslandColors) {
     Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(48.dp).clip(CircleShape).background(c.red.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
-            if (a.variant == 1) MicIcon(c.red, 24.dp) else ScreenRecIcon(c.red, 26.dp)
+            if (a.variant == 1) MicIcon(c.red, 24.dp, Modifier.shared("${a.id}:ic")) else ScreenRecIcon(c.red, 26.dp, Modifier.shared("${a.id}:ic"))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             T(if (a.variant == 1) "Enregistrement vocal" else "Enregistrement d'écran", c.fg, 15, FontWeight.SemiBold)
-            Roll(rememberClock(a, false), c.dim, 13, FontWeight.Normal)
+            Roll(rememberClock(a, false), c.dim, 13, FontWeight.Normal, Modifier.shared("${a.id}:clk"))
         }
         Pill("Arrêter", c.red, Color.White) { stopRecord(a) }
     }
@@ -1491,7 +1659,7 @@ private fun CallExpanded(a: Act, c: IslandColors) {
         AppAvatar(a, 52.dp, c)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            if (a.incoming) T("Appel entrant", c.dim, 12) else Roll(rememberClock(a, false), c.green, 12, FontWeight.Normal)
+            if (a.incoming) T("Appel entrant", c.dim, 12) else Roll(rememberClock(a, false), c.green, 12, FontWeight.Normal, Modifier.shared("${a.id}:clk"))
             T(a.title, c.fg, 16, FontWeight.SemiBold)
         }
         Tap(52.dp, if (a.incoming) "Refuser" else "Raccrocher", { (decline ?: a.actions.lastOrNull())?.fire() }) {

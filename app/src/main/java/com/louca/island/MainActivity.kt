@@ -285,6 +285,28 @@ object Demo {
             bigMs = 3_000, smallMs = 5_000)
     }
 
+    private var connI = 0
+    fun conn() {
+        val all = listOf(7 to "Livebox-7F21", 8 to "Wi-Fi déconnecté", 9 to "Mode Avion", 11 to "Point d'accès activé",
+            13 to "Économie d'énergie", 15 to "Mode Sommeil")
+        val (v, t) = all[connI++ % all.size]
+        IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = t, variant = v,
+            sub = if (v == 7) "Wi-Fi connecté" else if (v == 15) "Notifications et écran adaptés" else "", stamp = now()))
+    }
+
+    fun pay() {
+        IslandStore.remove("pay")
+        val base = Act(id = "pay", kind = Kind.PAY, pkg = IslandStore.DEMO, appName = "Wallet", title = "Approchez du lecteur",
+            level = 1, accent = 0xFFFFD60A.toInt())
+        IslandStore.upsert(base)
+        scope.launch {
+            delay(2600); IslandStore.upsert(base.copy(variant = 2))
+            delay(2200); IslandStore.upsert(base.copy(variant = 0))
+            delay(1400)
+            IslandStore.showStatus(base.copy(variant = 1, title = "12,50 €", sub = "Carrefour City", stamp = now()), bigMs = 3_000, smallMs = 5_000)
+        }
+    }
+
     private var sysI = 0
     fun system() {
         val list = listOf(2 to "Silencieux", 1 to "Vibreur", 0 to "Sonnerie", 3 to "Ne pas déranger", 5 to "Batterie faible · 15 %")
@@ -327,6 +349,7 @@ private fun Home() {
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { tick++ }
     val calOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.READ_CALENDAR) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val locOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val imgOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val btOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -349,7 +372,7 @@ private fun Home() {
         PageDef("look", "Apparence", "Couleur, hauteur, largeur, position", "theme couleur noir graphite clair taille hauteur largeur position apparence", Color(0xFFBF5AF2)),
         PageDef("zones", "Caméra & zones mortes", "Repère caméra, zones à éviter, bulles", "zone morte camera repere trou bulle verrouille accueil sim operateur masque", Color(0xFFFF453A)),
         PageDef("notif", "Notifications & pop-ups", "Pop-ups Samsung, apps masquées", "pop-up popup bandeau samsung termux adb masquer app filtre bloquer notification", Color(0xFF30D158)),
-        PageDef("live", "Activités & intégrations", "Itinéraire, sport, alarme, agenda, écouteurs, captures", "itineraire maps waze livraison sport live alarme agenda calendrier ecouteurs buds bluetooth paroles lyrics code verification otp systeme silencieux capture ecran screenshot", Color(0xFF64D2FF)),
+        PageDef("live", "Activités & intégrations", "Itinéraire, sport, alarme, agenda, écouteurs, captures", "itineraire maps waze livraison sport live alarme agenda calendrier ecouteurs buds bluetooth paroles lyrics code verification otp systeme silencieux capture ecran screenshot wifi avion point acces hotspot economie energie modes paiement nfc sans contact empreinte carte", Color(0xFF64D2FF)),
         PageDef("standby", "Mode veille en charge", "Écran musique en paysage", "veille charge standby paysage paroles horloge grand format", Color(0xFF5E5CE6)),
         PageDef("behav", "Comportement", "Plein écran, volet, verrouillage, repos", "comportement plein ecran volet verrouillage cadenas repos pilule apercu", Color(0xFF8E8E93)),
         PageDef("update", "Mises à jour & sauvegarde", "GitHub, exporter, importer", "mise a jour update github version sauvegarde export import reglages", Color(0xFF32ADE6)),
@@ -407,6 +430,8 @@ private fun Home() {
                             Chip("Silencieux / NPD") { Demo.system() }
                             Chip("Lampe") { Demo.torch() }
                             Chip("Capture d'écran") { Demo.shot() }
+                            Chip("Wi-Fi / Avion / Modes") { Demo.conn() }
+                            Chip("Paiement sans contact") { Demo.pay() }
                             Chip("Code de vérif") { Demo.otp() }
                             Chip("Alarme") { Demo.alarm() }
                             Chip("Rendez-vous") { Demo.event() }
@@ -496,6 +521,11 @@ private fun Home() {
                         Toggle("Activités en direct", "Live Updates Android : livraisons, VTC, téléchargements, Quick Share, scores sportifs.", s.showLive) { v -> Prefs.update { it.copy(showLive = v) } }
                         Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible. En grand 3 s, puis en petit 5 s.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
                         Toggle("Captures d'écran", "Aperçu avec Partager, Modifier et Supprimer juste après la capture.", s.showShots) { v -> Prefs.update { it.copy(showShots = v) } }
+                        Toggle("Connexions & modes", "Wi-Fi, mode Avion, point d'accès, économie d'énergie et Modes Samsung.", s.showConn) { v -> Prefs.update { it.copy(showConn = v) } }
+                        if (s.showConn && !locOk) Step("Nom du Wi-Fi", "Android ne donne le nom du réseau qu'avec la localisation.", false, "Autoriser") {
+                            permLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION))
+                        }
+                        Toggle("Paiement sans contact", "Pilule « Approchez du lecteur » dans les apps qui paient en NFC, empreinte demandée, puis montant payé.", s.showPay) { v -> Prefs.update { it.copy(showPay = v) } }
                         if (s.showShots && !imgOk) Step("Accès aux photos", "Pour voir les nouvelles captures d'écran.", false, "Autoriser") {
                             permLauncher.launch(arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES))
                         }

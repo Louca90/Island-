@@ -209,6 +209,8 @@ class IslandNotificationService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (sbn.packageName == MODES && sbn.isOngoing && Prefs.state.value.showConn)
+            IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = "Mode désactivé", variant = 16, stamp = System.currentTimeMillis()))
         IslandStore.dropNotif(sbn.key)
         IslandStore.removeIf { it.key == sbn.key && it.pkg != IslandStore.DEMO }
     }
@@ -236,6 +238,12 @@ class IslandNotificationService : NotificationListenerService() {
         val low = "$title $text $pkg ${n.channelId ?: ""}".lowercase()
         val ongoing = sbn.isOngoing
         val st = Prefs.state.value
+        // Samsung Modes (Sommeil, Conduite, Travail…): the Modes app posts an ongoing notification while one is on
+        if (pkg == MODES) {
+            if (!initial && ongoing && st.showConn && title.isNotBlank())
+                IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = title, sub = text, variant = 15, stamp = System.currentTimeMillis()))
+            return
+        }
         val promoted = ex.getBoolean("android.requestPromotedOngoing") || (n.flags and 0x40000) != 0
         val shortText = ex.getCharSequence("android.shortCriticalText")?.toString() ?: ""
         val sub = ex.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
@@ -429,6 +437,7 @@ class IslandNotificationService : NotificationListenerService() {
                 )
                 IslandStore.putNotif(item)
                 if (initial) return
+                if (st.showPay && showPaid(pkg, title, text, n, item)) return
                 val otp = findOtp("$title $text")
                 if (otp != null && st.showOtp) {
                     IslandStore.upsert(
@@ -589,12 +598,44 @@ class IslandNotificationService : NotificationListenerService() {
         runCatching { packageManager.getApplicationIcon(pkg).toBitmap(96, 96) }.getOrNull()
     }
 
+    // ---- contactless payment receipts
+    private val amountRx = Regex(
+        """([€$£])\s?(\d{1,3}(?:[ \u00a0\u202f.,]\d{3})*(?:[.,]\d{1,2})?)|(\d{1,3}(?:[ \u00a0\u202f.]\d{3})*(?:[.,]\d{1,2})?)\s?(€|EUR|USD|GBP|CHF|\$|£)""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val payWords = Regex("paiement|payé|payée|achat|paid|payment|purchase|transaction|débit|dépense|sans contact|contactless|carte|card", RegexOption.IGNORE_CASE)
+    private val notPaid = Regex("reçu|recu |received|remboursement|refund|virement reçu|vous a envoyé|sent you|refus|declined|échou", RegexOption.IGNORE_CASE)
+
+    /** A payment notification (wallet, or right after a contactless app was open) becomes a "Payé" pill with the amount. */
+    private fun showPaid(pkg: String, title: String, text: String, n: Notification, item: Act): Boolean {
+        val all = "$title $text"
+        val m = amountRx.find(all) ?: return false
+        if (notPaid.containsMatchIn(all)) return false
+        val chat = n.category == Notification.CATEGORY_MESSAGE || n.category == Notification.CATEGORY_EMAIL || n.category == Notification.CATEGORY_SOCIAL
+        val wallet = pkg in IslandStore.payPkgs
+        val recent = System.currentTimeMillis() - IslandStore.payContextAt < 5 * 60_000
+        if (!(wallet || recent || (payWords.containsMatchIn(all) && !chat))) return false
+        val amount = if (m.groupValues[1].isNotEmpty()) m.groupValues[1] + m.groupValues[2]
+            else m.groupValues[3] + " " + when (m.groupValues[4].uppercase()) { "EUR" -> "€"; "USD" -> "$"; "GBP" -> "£"; else -> m.groupValues[4] }
+        val merchant = Regex("(?:\\bchez|\\bat|\\sà|@)\\s+([^,.\\n€$£]{2,32})", RegexOption.IGNORE_CASE).find(all)?.groupValues?.get(1)?.trim()
+            ?: title.takeIf { it.isNotBlank() && !amountRx.containsMatchIn(it) && it != label(pkg) && !payWords.matches(it) }
+            ?: label(pkg)
+        IslandStore.showStatus(
+            Act(id = "pay", kind = Kind.PAY, key = item.key, pkg = pkg, appName = label(pkg), appIcon = item.appIcon,
+                accent = accentOf(item.appIcon), title = amount, sub = merchant, variant = 1,
+                contentIntent = n.contentIntent, stamp = System.currentTimeMillis()),
+            bigMs = 3_000, smallMs = 5_000,
+        )
+        return true
+    }
+
     private fun label(pkg: String): String = nameCache.getOrPut(pkg) {
         runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }
             .getOrDefault(pkg)
     }
 
     companion object {
+        const val MODES = "com.samsung.android.app.routines"
         @Volatile var instance: IslandNotificationService? = null
 
         fun accentOf(b: Bitmap?): Int {

@@ -6,6 +6,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.core.graphics.drawable.toBitmap
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -136,6 +138,8 @@ class IslandAccessibilityService : AccessibilityService() {
             val s = Prefs.state.value
             when (i.action) {
                 Intent.ACTION_SCREEN_OFF -> {
+                    payOpen = null; bioOn = false
+                    IslandStore.removeIf { (it.id == "pay" && it.variant != 1) || it.id == "bio" }
                     IslandStore.locked.value = true
                     IslandStore.expanded.value = false
                     IslandStore.remove("notif")
@@ -187,6 +191,33 @@ class IslandAccessibilityService : AccessibilityService() {
                 android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED,
                 android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED,
                 BT_BATTERY -> onBluetooth(i, s)
+                Intent.ACTION_AIRPLANE_MODE_CHANGED -> {
+                    airplaneAt = System.currentTimeMillis()
+                    if (!s.showConn) return
+                    val on = i.getBooleanExtra("state", false)
+                    conn(if (on) 9 else 10, if (on) "Mode Avion" else "Mode Avion désactivé")
+                }
+                android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION -> {
+                    if (isInitialStickyBroadcast || !s.showConn) return
+                    val st = i.getIntExtra(android.net.wifi.WifiManager.EXTRA_WIFI_STATE, -1)
+                    if (st == android.net.wifi.WifiManager.WIFI_STATE_DISABLED) {
+                        wifiOffAt = System.currentTimeMillis()
+                        if (System.currentTimeMillis() - airplaneAt > 4000) conn(8, "Wi-Fi désactivé")
+                    }
+                }
+                WIFI_AP_STATE -> {
+                    if (isInitialStickyBroadcast || !s.showConn) return
+                    when (i.getIntExtra("wifi_state", -1)) {
+                        13 -> conn(11, "Point d'accès activé")
+                        11 -> conn(12, "Point d'accès désactivé")
+                    }
+                }
+                android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                    if (!s.showConn) return
+                    val on = getSystemService(android.os.PowerManager::class.java).isPowerSaveMode
+                    conn(if (on) 13 else 14, if (on) "Économie d'énergie" else "Économie d'énergie désactivée")
+                }
+                Intent.ACTION_PACKAGE_ADDED, Intent.ACTION_PACKAGE_REMOVED -> refreshPayPkgs()
             }
         }
     }
@@ -229,6 +260,12 @@ class IslandAccessibilityService : AccessibilityService() {
             addAction(BT_BATTERY)
             addAction(android.media.AudioManager.RINGER_MODE_CHANGED_ACTION)
             addAction(android.app.NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
+            addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+            addAction(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION)
+            addAction(WIFI_AP_STATE)
+            addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
         }, Context.RECEIVER_EXPORTED)
 
         scope.launch {
@@ -240,6 +277,8 @@ class IslandAccessibilityService : AccessibilityService() {
         }
         setupTorch()
         setupScreenshots()
+        setupWifi()
+        refreshPayPkgs()
 
         // After the full-screen landscape player closes, re-read orientation and system-bar state:
         // otherwise the island can stay hidden, thinking it is still full screen / landscape.
@@ -346,6 +385,12 @@ class IslandAccessibilityService : AccessibilityService() {
                 bigMs = 3_000, smallMs = 5_000,
             )
         }
+    }
+
+    private companion object Pay {
+        const val WIFI_AP_STATE = "android.net.wifi.WIFI_AP_STATE_CHANGED"
+        val WALLETS = setOf("com.google.android.apps.walletnfcrel", "com.samsung.android.spay")
+        val BIO_PKGS = setOf("com.samsung.android.biometrics.app.setting")
     }
 
     private var camId: String? = null
@@ -511,6 +556,115 @@ class IslandAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val t = event?.eventType ?: return
         if (t == AccessibilityEvent.TYPE_WINDOWS_CHANGED || t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) checkShade()
+        if (t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) runCatching { onForeground(event) }
+        if (t == AccessibilityEvent.TYPE_WINDOWS_CHANGED && bioOn) runCatching { checkBioGone() }
+    }
+
+    // ---- contactless payment & fingerprint prompts
+    private var payOpen: String? = null
+    private var bioOn = false
+
+    /** Apps that really pay contactless: they declare an NFC card-emulation (HCE) service. A plain bank app doesn't. */
+    private fun refreshPayPkgs() {
+        val hce = runCatching {
+            packageManager.queryIntentServices(Intent("android.nfc.cardemulation.action.HOST_APDU_SERVICE"), PackageManager.GET_META_DATA)
+                .map { it.serviceInfo.packageName }
+        }.getOrDefault(emptyList())
+        val def = runCatching {
+            android.provider.Settings.Secure.getString(contentResolver, "nfc_payment_default_component")
+                ?.let { android.content.ComponentName.unflattenFromString(it)?.packageName }
+        }.getOrNull()
+        IslandStore.payPkgs = (hce + listOfNotNull(def) + WALLETS).toSet().filterNot { p ->
+            p == packageName || p.startsWith("com.android.") || p == "com.google.android.gms" || p == "com.samsung.android.nfc.resolver"
+        }.toSet()
+    }
+
+    private fun isIme(p: String) = p.contains("inputmethod") || p.contains("honeyboard") || p.contains("keyboard")
+
+    private fun onForeground(e: AccessibilityEvent) {
+        val pkg = e.packageName?.toString() ?: return
+        val s = Prefs.state.value
+        val cls = e.className?.toString() ?: ""
+        val isBio = pkg in BIO_PKGS || cls.contains("Biometric") || cls.contains("AuthContainer") || cls.contains("FingerprintDialog")
+        if (isBio) { if (s.showPay) showBio(true); return }
+        if (pkg == packageName || pkg == "com.android.systemui" || isIme(pkg)) return
+        if (bioOn) showBio(false)
+        if (s.showPay && pkg in IslandStore.payPkgs) showPay(pkg)
+        else if (payOpen != null) {
+            payOpen = null
+            scope.launch {
+                kotlinx.coroutines.delay(900)
+                if (payOpen == null) IslandStore.removeIf { it.id == "pay" && it.variant != 1 }
+            }
+        }
+    }
+
+    private fun showPay(pkg: String) {
+        payOpen = pkg
+        IslandStore.payContextAt = System.currentTimeMillis()
+        val cur = IslandStore.acts.value.find { it.id == "pay" }
+        if (cur != null && cur.variant == 1) return // a "paid" pill is showing: leave it
+        val nfc = runCatching { android.nfc.NfcAdapter.getDefaultAdapter(this) }.getOrNull()
+        val off = nfc != null && !nfc.isEnabled
+        val icon = runCatching { packageManager.getApplicationIcon(pkg).toBitmap(96, 96) }.getOrNull()
+        val name = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault("Wallet")
+        IslandStore.upsert(
+            Act(id = "pay", kind = Kind.PAY, pkg = pkg, appName = name, appIcon = icon,
+                accent = IslandNotificationService.accentOf(icon),
+                title = if (off) "NFC désactivé" else "Approchez du lecteur", level = if (off) 0 else 1,
+                variant = if (bioOn) 2 else 0)
+        )
+    }
+
+    private fun showBio(on: Boolean) {
+        bioOn = on
+        val pay = IslandStore.acts.value.find { it.id == "pay" }
+        if (on) {
+            if (pay != null && pay.variant != 1) IslandStore.upsert(pay.copy(variant = 2))
+            else IslandStore.upsert(Act(id = "bio", kind = Kind.PAY, variant = 2, appName = "Empreinte", title = "Posez votre doigt"), ttl = 30_000)
+        } else {
+            IslandStore.remove("bio")
+            if (pay != null && pay.variant == 2) {
+                if (payOpen != null) IslandStore.upsert(pay.copy(variant = 0)) else IslandStore.remove("pay")
+            }
+        }
+    }
+
+    /** The fingerprint dialog doesn't change the foreground app when it closes: check its window is gone. */
+    private fun checkBioGone() {
+        val still = windows.any { w -> w.root?.packageName?.toString()?.let { it in BIO_PKGS } == true }
+        if (!still && windows.none { w -> w.title?.toString()?.contains("Biometric", true) == true }) showBio(false)
+    }
+
+    // ---- connectivity
+    private var airplaneAt = 0L
+    private var wifiOffAt = 0L
+
+    private fun conn(v: Int, title: String, sub: String = "") =
+        IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = title, sub = sub, variant = v, stamp = System.currentTimeMillis()))
+
+    private fun setupWifi() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val started = System.currentTimeMillis()
+        val req = android.net.NetworkRequest.Builder().addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI).build()
+        val cb = object : android.net.ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
+            val announced = mutableSetOf<android.net.Network>()
+            override fun onCapabilitiesChanged(n: android.net.Network, caps: android.net.NetworkCapabilities) {
+                if (n in announced || !caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
+                announced += n
+                if (System.currentTimeMillis() - started < 5000 || !Prefs.state.value.showConn) return
+                val ssid = (caps.transportInfo as? android.net.wifi.WifiInfo)?.ssid?.trim('"')
+                    ?.takeIf { it.isNotBlank() && !it.contains("unknown ssid") }
+                scope.launch { if (ssid != null) conn(7, ssid, "Wi-Fi connecté") else conn(7, "Wi-Fi connecté") }
+            }
+            override fun onLost(n: android.net.Network) {
+                if (!announced.remove(n) || !Prefs.state.value.showConn) return
+                val now = System.currentTimeMillis()
+                if (now - wifiOffAt < 4000 || now - airplaneAt < 4000) return
+                scope.launch { conn(8, "Wi-Fi déconnecté") }
+            }
+        }
+        runCatching { cm.registerNetworkCallback(req, cb) }
     }
 
     private fun checkShade() {

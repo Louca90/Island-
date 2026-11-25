@@ -806,3 +806,171 @@ fun ExpandIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         }
     }
 }
+
+
+// ------------------------------------------------------------------ connectivity & payment
+
+/** Wi-Fi fan: the arcs light up from the dot outwards; [on] = false dims it and draws a slash. */
+@Composable
+fun WifiIcon(color: Color, size: Dp, on: Boolean = true, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val k = ph.value
+        val c = Offset(w / 2, w * .8f)
+        val col = if (on) color else color.copy(alpha = color.alpha * .55f)
+        drawCircle(col, w * .07f, c)
+        listOf(.28f, .48f, .68f).forEachIndexed { i, r ->
+            val q = ease(seg(k, .15f + i * .18f, .6f + i * .18f))
+            if (q > 0f) drawArc(col.copy(alpha = col.alpha * q), 225f, 90f, false, Offset(c.x - w * r, c.y - w * r), Size(w * r * 2, w * r * 2),
+                style = Stroke(w * .09f, cap = StrokeCap.Round))
+        }
+        if (!on) {
+            val q = ease(seg(k, .5f, 1f))
+            drawLine(color, Offset(w * .14f, w * .14f), Offset(w * (.14f + .72f * q), w * (.14f + .72f * q)), w * .09f, StrokeCap.Round)
+        }
+    }
+}
+
+private val planePath by lazy {
+    PathParser().parsePathString(
+        "M21,16v-2l-8,-5V3.5C13,2.67 12.33,2 11.5,2S10,2.67 10,3.5V9l-8,5v2l8,-2.5V19l-2,1.5V22l3.5,-1l3.5,1v-1.5L13,19v-5.5L21,16z"
+    ).toPath()
+}
+
+/** Plane that takes off into place. */
+@Composable
+fun AirplaneIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val e = ease(ph.value)
+        translate((1f - e) * -w * .25f, (1f - e) * w * .25f) {
+            rotate(45f) { scale(w / 24f, w / 24f, Offset.Zero) { translate(.5f, 0f) { drawPath(planePath, color) } } }
+        }
+    }
+}
+
+/** Hotspot: a dot broadcasting rings on both sides. */
+@Composable
+fun HotspotIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val k = ph.value
+        val c = Offset(w / 2, w / 2)
+        drawCircle(color, w * .08f, c)
+        val st = Stroke(w * .08f, cap = StrokeCap.Round)
+        listOf(.24f, .42f).forEachIndexed { i, r ->
+            val q = ease(seg(k, .2f + i * .25f, .7f + i * .25f))
+            if (q <= 0f) return@forEachIndexed
+            val tl = Offset(c.x - w * r, c.y - w * r); val sz = Size(w * r * 2, w * r * 2)
+            drawArc(color.copy(alpha = color.alpha * q), 135f, 90f, false, tl, sz, style = st)
+            drawArc(color.copy(alpha = color.alpha * q), -45f, 90f, false, tl, sz, style = st)
+        }
+    }
+}
+
+/** Leaf (power saving): outline draws itself, then fills, the vein last. */
+@Composable
+fun LeafIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val k = ph.value
+        val p = Path().apply {
+            moveTo(w * .18f, w * .82f)
+            cubicTo(w * .14f, w * .4f, w * .42f, w * .16f, w * .86f, w * .14f)
+            cubicTo(w * .88f, w * .58f, w * .62f, w * .86f, w * .18f, w * .82f)
+            close()
+        }
+        drawPath(trim(p, ease(seg(k, 0f, .6f))), color, style = Stroke(w * .08f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        val f = seg(k, .45f, .85f)
+        if (f > 0f) drawPath(p, color.copy(alpha = color.alpha * f * .9f))
+        val v = ease(seg(k, .6f, 1f))
+        if (v > 0f) drawLine(Color.Black.copy(alpha = .45f * f), Offset(w * .2f, w * .8f), Offset(w * (.2f + .42f * v), w * (.8f - .42f * v)), w * .06f, StrokeCap.Round)
+    }
+}
+
+/** Four-point sparkle for Samsung Modes. */
+@Composable
+fun ModeIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val e = ease(ph.value)
+        rotate(-90f * (1f - e)) {
+            val c = w / 2
+            val p = Path().apply {
+                moveTo(c, w * .06f)
+                quadraticTo(c + w * .06f, c - w * .06f, w * .94f, c)
+                quadraticTo(c + w * .06f, c + w * .06f, c, w * .94f)
+                quadraticTo(c - w * .06f, c + w * .06f, w * .06f, c)
+                quadraticTo(c - w * .06f, c - w * .06f, c, w * .06f)
+                close()
+            }
+            drawPath(p, color)
+            val s2 = ease(seg(ph.value, .5f, 1f))
+            if (s2 > 0f) drawCircle(color, w * .07f * s2, Offset(w * .82f, w * .18f))
+        }
+    }
+}
+
+/** Contactless waves pulsing outwards, one after the other. */
+@Composable
+fun NfcIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    val clk = frameClock()
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val c = Offset(w * .12f, w / 2)
+        val t = (clk.value % 1400L) / 1400f
+        listOf(.3f, .54f, .78f).forEachIndexed { i, r ->
+            val q = ease(seg(ph.value, .1f + i * .2f, .5f + i * .2f))
+            if (q <= 0f) return@forEachIndexed
+            // a brightness wave travels outwards
+            val d = ((t - i * .18f) % 1f + 1f) % 1f
+            val glow = .45f + .55f * (1f - (d * 2.2f).coerceAtMost(1f))
+            drawArc(color.copy(alpha = color.alpha * q * glow), -42f, 84f, false, Offset(c.x - w * r, c.y - w * r), Size(w * r * 2, w * r * 2),
+                style = Stroke(w * .09f, cap = StrokeCap.Round))
+        }
+    }
+}
+
+/** Fingerprint: ridges draw themselves, then a soft scan line sweeps up and down. */
+@Composable
+fun FingerprintIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    val clk = frameClock()
+    Canvas(modifier.size(size).appear(ph)) {
+        val w = this.size.width
+        val k = ph.value
+        val st = Stroke(w * .07f, cap = StrokeCap.Round)
+        val c = Offset(w / 2, w * .56f)
+        val ridges = listOf(Triple(.40f, 200f, 140f), Triple(.31f, 185f, 170f), Triple(.22f, 175f, 200f), Triple(.13f, 160f, 240f))
+        fun draw(col: Color) = ridges.forEachIndexed { i, (r, a0, sw) ->
+            val q = ease(seg(k, i * .12f, .55f + i * .12f))
+            if (q > 0f) drawArc(col, a0, sw * q, false, Offset(c.x - w * r, c.y - w * r), Size(w * r * 2, w * r * 2), style = st)
+        }
+        draw(color.copy(alpha = color.alpha * .5f))
+        val t = (clk.value % 1800L) / 1800f
+        val y = w * (.12f + .8f * (if (t < .5f) t * 2 else 2 - t * 2))
+        clipRect(top = y - w * .16f, bottom = y + w * .16f) { draw(color) }
+    }
+}
+
+/** A payment card: the wallet's colour with a chip. */
+@Composable
+fun CardChip(color: Color, width: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(width, width * .66f).graphicsLayer {
+        val e = ease(seg(ph.value, .2f, 1f))
+        rotationY = -70f * (1f - e); alpha = seg(ph.value, .2f, .5f)
+        cameraDistance = 12f * density
+    }) {
+        val w = this.size.width; val h = this.size.height
+        drawRoundRect(color, Offset.Zero, this.size, CornerRadius(w * .14f))
+        drawRoundRect(Color.White.copy(alpha = .14f), Offset(0f, h * .5f), Size(w, h * .5f), CornerRadius(w * .14f))
+        drawRoundRect(Color(0xFFE9D79B), Offset(w * .14f, h * .3f), Size(w * .24f, h * .3f), CornerRadius(w * .05f))
+    }
+}
