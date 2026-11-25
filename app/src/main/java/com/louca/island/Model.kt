@@ -471,6 +471,67 @@ object IslandStore {
         upsert(m.copy(shuffle = now))
     }
 
+    // ---- queue & repeat (only if the player shares them through its media session)
+    data class QItem(val id: Long, val title: String, val subtitle: String, val icon: android.graphics.Bitmap?)
+
+    private val demoQueue = (1..8).map { QItem(it.toLong(), "Titre suivant n°$it", "Artiste de démo", null) }
+    private var demoActive = 1L
+    private var demoRepeat = 0
+
+    fun queue(): List<QItem> {
+        val m = acts.value.find { it.id == "music" }
+        if (m?.pkg == DEMO) return demoQueue
+        return runCatching {
+            media?.queue?.map { q ->
+                val d = q.description
+                QItem(q.queueId, d.title?.toString() ?: "", d.subtitle?.toString() ?: "", d.iconBitmap)
+            } ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    fun activeQueueId(): Long {
+        val m = acts.value.find { it.id == "music" }
+        if (m?.pkg == DEMO) return demoActive
+        return media?.playbackState?.activeQueueItemId ?: -1L
+    }
+
+    fun playQueueItem(id: Long) {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) {
+            demoActive = id
+            demoQueue.find { it.id == id }?.let { q ->
+                upsert(m.copy(title = q.title, position = 0, posUpdatedAt = SystemClock.elapsedRealtime(), playing = true))
+            }
+            return
+        }
+        media?.transportControls?.skipToQueueItem(id)
+    }
+
+    /** 0 = off, 1 = all, 2 = one, -1 = not supported by the player. */
+    fun repeatMode(): Int {
+        val m = acts.value.find { it.id == "music" }
+        if (m?.pkg == DEMO) return demoRepeat
+        return when (runCatching { compat?.repeatMode ?: -1 }.getOrDefault(-1)) {
+            android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_NONE -> 0
+            android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_ALL,
+            android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_GROUP -> 1
+            android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_ONE -> 2
+            else -> -1
+        }
+    }
+
+    fun cycleRepeat() {
+        val m = acts.value.find { it.id == "music" } ?: return
+        if (m.pkg == DEMO) { demoRepeat = (demoRepeat + 1) % 3; return }
+        val c = compat ?: return
+        val next = when (repeatMode()) {
+            0 -> android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_ALL
+            1 -> android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_ONE
+            else -> android.support.v4.media.session.PlaybackStateCompat.REPEAT_MODE_NONE
+        }
+        c.transportControls.setRepeatMode(next)
+    }
+
     fun seek(ms: Long) {
         val m = acts.value.find { it.id == "music" } ?: return
         if (m.pkg == DEMO) { upsert(m.copy(position = ms, posUpdatedAt = SystemClock.elapsedRealtime())); return }

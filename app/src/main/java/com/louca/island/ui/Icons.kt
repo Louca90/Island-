@@ -617,3 +617,33 @@ fun HourglassIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         drawPath(sand, color)
     }
 }
+
+/** Repeat: two looping arrows; mode 2 (one) adds a small dot. Mode < 0 = unsupported (dimmed). */
+@Composable
+fun RepeatIcon(mode: Int, color: Color, activeColor: Color, size: Dp, modifier: Modifier = Modifier) {
+    val k by animateFloatAsState(if (mode > 0) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "rp")
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        val col = androidx.compose.ui.graphics.lerp(color, activeColor, k)
+        val st = Stroke(w * .08f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val top = Path().apply { moveTo(w * .18f, w * .5f); lineTo(w * .18f, w * .4f); cubicTo(w * .18f, w * .3f, w * .24f, w * .28f, w * .34f, w * .28f); lineTo(w * .8f, w * .28f) }
+        val bot = Path().apply { moveTo(w * .82f, w * .5f); lineTo(w * .82f, w * .6f); cubicTo(w * .82f, w * .7f, w * .76f, w * .72f, w * .66f, w * .72f); lineTo(w * .2f, w * .72f) }
+        drawPath(top, col, style = st); drawPath(bot, col, style = st)
+        drawPath(Path().apply { moveTo(w * .7f, w * .18f); lineTo(w * .82f, w * .28f); lineTo(w * .7f, w * .38f) }, col, style = st)
+        drawPath(Path().apply { moveTo(w * .3f, w * .62f); lineTo(w * .18f, w * .72f); lineTo(w * .3f, w * .82f) }, col, style = st)
+        if (mode == 2) drawCircle(activeColor, w * .07f, Offset(w * .5f, w * .5f))
+    }
+}
+
+/** Two diagonal arrows pointing outwards (open full screen). */
+@Composable
+fun ExpandIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        val st = Stroke(w * .1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        drawLine(color, Offset(w * .58f, w * .42f), Offset(w * .84f, w * .16f), w * .1f, StrokeCap.Round)
+        drawPath(Path().apply { moveTo(w * .58f, w * .16f); lineTo(w * .84f, w * .16f); lineTo(w * .84f, w * .42f) }, color, style = st)
+        drawLine(color, Offset(w * .42f, w * .58f), Offset(w * .16f, w * .84f), w * .1f, StrokeCap.Round)
+        drawPath(Path().apply { moveTo(w * .16f, w * .58f); lineTo(w * .16f, w * .84f); lineTo(w * .42f, w * .84f) }, color, style = st)
+    }
+}

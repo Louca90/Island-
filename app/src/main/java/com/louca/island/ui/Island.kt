@@ -987,6 +987,12 @@ private fun MusicExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
                 }
                 Spacer(Modifier.width(4.dp))
             }
+            Tap(40.dp, "Ouvrir en grand", { poke(); IslandStore.expanded.value = false; IslandStore.openStandby() }) {
+                Box(Modifier.size(34.dp).clip(CircleShape).background(c.btn), contentAlignment = Alignment.Center) {
+                    ExpandIcon(c.fg, 16.dp)
+                }
+            }
+            Spacer(Modifier.width(4.dp))
             Equalizer(a.playing, accent, 20.dp)
         }
         val ly by IslandStore.lyrics.collectAsState()

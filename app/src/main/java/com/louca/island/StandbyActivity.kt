@@ -40,6 +40,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,6 +84,8 @@ import com.louca.island.ui.BoltIcon
 import com.louca.island.ui.HeartIcon
 import com.louca.island.ui.PlayPauseIcon
 import com.louca.island.ui.ShuffleIcon
+import com.louca.island.ui.RepeatIcon
+import androidx.compose.animation.core.animateFloat
 import com.louca.island.ui.SkipIcon
 import com.louca.island.ui.Tap
 import com.louca.island.ui.fmt
@@ -151,11 +155,20 @@ private fun Standby(close: () -> Unit) {
     val accent = music?.accent?.takeIf { it != 0 }?.let { Color(it) } ?: Color(0xFF2A2D36)
     val bg by animateColorAsState(lerp(Color(0xFF07080A), accent, .22f), tween(900), label = "bg")
 
+    val fadeIn = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { fadeIn.animateTo(1f, tween(450)) }
     Box(
-        Modifier.fillMaxSize().background(bg)
+        Modifier.fillMaxSize().background(Color.Black)
             .pointerInput(Unit) { detectTapGestures(onDoubleTap = { close() }) }
     ) {
-        Box(Modifier.fillMaxSize().offset(driftX, driftY).padding(horizontal = 36.dp, vertical = 22.dp)) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = fadeIn.value }.background(bg))
+        MovingBackdrop(accent, music?.playing == true, Modifier.graphicsLayer { alpha = fadeIn.value })
+        Box(
+            Modifier.fillMaxSize()
+                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.displayCutout)
+                .offset(driftX, driftY)
+                .padding(start = 56.dp, end = 36.dp, top = 22.dp, bottom = 22.dp)
+        ) {
             // top-right status: time + charging
             Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) {
                 if (music != null) {
@@ -196,14 +209,25 @@ private fun Player(a: Act) {
     val dur = a.duration.coerceAtLeast(1)
     val pos = a.livePosition().coerceIn(0, dur)
 
+    // Opening animation: cover grows in, left column slides from the side, right panel fades in last.
+    val enter = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, tween(750, easing = FastOutSlowInEasing)) }
+    val e = enter.value
+    var tab by remember { mutableIntStateOf(0) } // 0 = paroles, 1 = file d'attente
+
     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
         // ---------------- left: cover + info + controls
-        Column(Modifier.fillMaxHeight().weight(.46f), verticalArrangement = Arrangement.Center) {
+        Column(
+            Modifier.fillMaxHeight().weight(.46f).graphicsLayer { translationX = (1f - e) * -60.dp.toPx(); alpha = e },
+            verticalArrangement = Arrangement.Center,
+        ) {
             val coverScale by animateFloatAsState(if (a.playing) 1f else .9f, tween(450, easing = FastOutSlowInEasing), label = "cs")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Crossfade(a.art, animationSpec = tween(500), label = "art") { art ->
                     Box(
-                        Modifier.size(150.dp).graphicsLayer { scaleX = coverScale; scaleY = coverScale }
+                        Modifier.size(150.dp).graphicsLayer {
+                            val k = coverScale * (.6f + .4f * e); scaleX = k; scaleY = k
+                        }
                             .clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = .08f))
                     ) {
                         if (art != null) Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -211,8 +235,16 @@ private fun Player(a: Act) {
                 }
                 Spacer(Modifier.width(20.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(a.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1,
-                        modifier = Modifier.basicMarquee())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(a.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                            modifier = Modifier.weight(1f).basicMarquee())
+                        if (a.liked != null || a.pkg == IslandStore.DEMO) {
+                            val accent = a.accent.takeIf { it != 0 }?.let { lerp(Color(it), Color.White, .35f) } ?: Color.White
+                            Tap(44.dp, if (a.liked == true) "Retirer des favoris" else "Ajouter aux favoris", { IslandStore.toggleLike() }) {
+                                HeartIcon(a.liked == true, Color.White.copy(alpha = .55f), accent, 24.dp)
+                            }
+                        }
+                    }
                     Text(a.text, color = Color.White.copy(alpha = .62f), fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(6.dp))
                     Text(a.appName, color = Color.White.copy(alpha = .38f), fontSize = 13.sp, maxLines = 1)
@@ -226,13 +258,24 @@ private fun Player(a: Act) {
             VolumeBar()
         }
         Spacer(Modifier.width(40.dp))
-        // ---------------- right: lyrics, or a calm placeholder
-        Box(Modifier.fillMaxHeight().weight(.54f), contentAlignment = Alignment.CenterStart) {
-            if (lines != null) BigLyrics(lines, pos)
-            else Text(
-                if (Prefs.state.value.showLyrics) "Pas de paroles synchronisées pour ce titre" else "Paroles désactivées",
-                color = Color.White.copy(alpha = .35f), fontSize = 18.sp,
-            )
+        // ---------------- right: lyrics or queue
+        Column(Modifier.fillMaxHeight().weight(.54f).graphicsLayer { alpha = ((e - .35f) / .65f).coerceIn(0f, 1f) }) {
+            Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TabPill("Paroles", tab == 0) { tab = 0 }
+                TabPill("File d'attente", tab == 1) { tab = 1 }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                Crossfade(tab, animationSpec = tween(300), label = "tab") { t ->
+                    if (t == 1) QueuePanel(a)
+                    else if (lines != null) BigLyrics(lines, pos)
+                    else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                        Text(
+                            if (Prefs.state.value.showLyrics) "Pas de paroles synchronisées pour ce titre" else "Paroles désactivées",
+                            color = Color.White.copy(alpha = .35f), fontSize = 18.sp,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -271,6 +314,8 @@ private fun Controls(a: Act) {
     var nextT by remember { mutableIntStateOf(0) }
     var prevT by remember { mutableIntStateOf(0) }
     val accent = a.accent.takeIf { it != 0 }?.let { lerp(Color(it), Color.White, .35f) } ?: Color.White
+    var repeat by remember { mutableIntStateOf(IslandStore.repeatMode()) }
+    LaunchedEffect(Unit) { while (true) { repeat = IslandStore.repeatMode(); delay(800) } }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Tap(52.dp, if (a.shuffle == true) "Désactiver l'aléatoire" else "Lecture aléatoire", { IslandStore.toggleShuffle() }) {
             ShuffleIcon(a.shuffle == true, Color.White.copy(alpha = .55f), accent, 28.dp)
@@ -278,16 +323,101 @@ private fun Controls(a: Act) {
         Tap(64.dp, "Précédent", { prevT++; IslandStore.prev() }) { SkipIcon(false, prevT, Color.White, 38.dp) }
         Tap(76.dp, if (a.playing) "Pause" else "Lecture", { IslandStore.playPause() }) { PlayPauseIcon(a.playing, Color.White, 46.dp) }
         Tap(64.dp, "Suivant", { nextT++; IslandStore.next() }) { SkipIcon(true, nextT, Color.White, 38.dp) }
-        Tap(52.dp, if (a.liked == true) "Retirer des favoris" else "Ajouter aux favoris", { IslandStore.toggleLike() }) {
-            HeartIcon(a.liked == true, Color.White.copy(alpha = .55f), accent, 26.dp)
+        Tap(52.dp, when (repeat) { 1 -> "Répéter tout"; 2 -> "Répéter le titre"; else -> "Répétition désactivée" },
+            { IslandStore.cycleRepeat(); repeat = (repeat + 1) % 3 }) {
+            RepeatIcon(repeat, Color.White.copy(alpha = if (repeat < 0) .2f else .55f), accent, 26.dp)
+        }
+    }
+}
+
+@Composable
+private fun TabPill(label: String, on: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(if (on) Color.White else Color.White.copy(alpha = .1f), tween(220), label = "tp")
+    val fg by animateColorAsState(if (on) Color.Black else Color.White.copy(alpha = .7f), tween(220), label = "tf")
+    Box(
+        Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(bg)
+            .pointerInput(Unit) { detectTapGestures { onClick() } }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+}
+
+/** Up-next list shared by the player's media session; tap an item to jump to it. */
+@Composable
+private fun QueuePanel(a: Act) {
+    var items by remember { mutableStateOf(IslandStore.queue()) }
+    var active by remember { mutableLongStateOf(IslandStore.activeQueueId()) }
+    LaunchedEffect(a.title) {
+        while (true) { items = IslandStore.queue(); active = IslandStore.activeQueueId(); delay(1000) }
+    }
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+            Text("${a.appName.ifBlank { "Cette app" }} ne partage pas sa file d'attente avec Android.",
+                color = Color.White.copy(alpha = .35f), fontSize = 18.sp)
+        }
+        return
+    }
+    val state = rememberLazyListState()
+    val activeIdx = items.indexOfFirst { it.id == active }
+    LaunchedEffect(activeIdx) { if (activeIdx >= 0) state.animateScrollToItem(activeIdx) }
+    LazyColumn(
+        state = state,
+        contentPadding = PaddingValues(vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(items.size) { i ->
+            val q = items[i]
+            val cur = q.id == active
+            val bg by animateColorAsState(if (cur) Color.White.copy(alpha = .12f) else Color.Transparent, tween(250), label = "qb")
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(bg)
+                    .pointerInput(q.id) { detectTapGestures { IslandStore.playQueueItem(q.id); active = q.id } }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = .08f))) {
+                    if (q.icon != null) Image(q.icon.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(q.title, color = if (cur) Color.White else Color.White.copy(alpha = .8f), fontSize = 16.sp,
+                        fontWeight = if (cur) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(q.subtitle, color = Color.White.copy(alpha = .45f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (cur) com.louca.island.ui.Equalizer(a.playing, Color.White, 18.dp)
+            }
         }
     }
 }
 
 /**
- * Volume: if the player is remote (Spotify Connect on a PC, a speaker, Cast…) we drive the
- * remote volume through the media session, exactly like One UI's volume keys. Otherwise phone media volume.
+ * Soft blobs in the cover's colour that drift slowly while music plays and settle when paused.
+ * Kept faint so it never fights with the text.
  */
+@Composable
+private fun MovingBackdrop(accent: Color, playing: Boolean, modifier: Modifier = Modifier) {
+    val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "bd")
+    val t by inf.animateFloat(0f, 1f, androidx.compose.animation.core.infiniteRepeatable(tween(18_000, easing = androidx.compose.animation.core.LinearEasing)), label = "t")
+    val pulse by inf.animateFloat(.9f, 1.08f, androidx.compose.animation.core.infiniteRepeatable(tween(2600, easing = FastOutSlowInEasing), androidx.compose.animation.core.RepeatMode.Reverse), label = "p")
+    val amt by animateFloatAsState(if (playing) 1f else .35f, tween(1200), label = "amt")
+    val col by animateColorAsState(accent, tween(1200), label = "col")
+    androidx.compose.foundation.Canvas(modifier.fillMaxSize()) {
+        val w = size.width; val h = size.height
+        val a = t * 2f * Math.PI.toFloat()
+        fun blob(cx: Float, cy: Float, r: Float, alpha: Float) {
+            drawCircle(
+                Brush.radialGradient(listOf(col.copy(alpha = alpha), Color.Transparent), androidx.compose.ui.geometry.Offset(cx, cy), r),
+                r, androidx.compose.ui.geometry.Offset(cx, cy)
+            )
+        }
+        val k = 1f + (pulse - 1f) * amt
+        blob(w * (.22f + .08f * kotlin.math.cos(a) * amt), h * (.35f + .1f * kotlin.math.sin(a) * amt), h * .9f * k, .32f)
+        blob(w * (.78f + .07f * kotlin.math.sin(a * 1.3f) * amt), h * (.7f + .08f * kotlin.math.cos(a * .8f) * amt), h * .8f * (2f - k), .22f)
+        blob(w * (.55f + .1f * kotlin.math.cos(a * .7f + 1f) * amt), h * (.15f + .06f * kotlin.math.sin(a * 1.1f) * amt), h * .6f, .16f)
+    }
+}
+
 @Composable
 private fun VolumeBar() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
