@@ -120,6 +120,11 @@ class StandbyActivity : ComponentActivity() {
         setContent { Standby { finish() } }
     }
 
+    override fun onResume() { super.onResume(); IslandStore.standby.value = true }
+
+    // Leaving (back, home, double tap…) must give the island back right away, not only on destroy.
+    override fun onPause() { IslandStore.standby.value = false; super.onPause() }
+
     override fun onDestroy() {
         runCatching { unregisterReceiver(unplug) }
         IslandStore.standby.value = false

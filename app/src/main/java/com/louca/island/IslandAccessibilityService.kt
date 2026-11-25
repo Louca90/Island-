@@ -237,6 +237,32 @@ class IslandAccessibilityService : AccessibilityService() {
             while (true) { runCatching { checkCalendar() }; kotlinx.coroutines.delay(30_000) }
         }
         setupTorch()
+
+        // After the full-screen landscape player closes, re-read orientation and system-bar state:
+        // otherwise the island can stay hidden, thinking it is still full screen / landscape.
+        scope.launch {
+            IslandStore.standby.collect { on ->
+                if (!on) {
+                    kotlinx.coroutines.delay(350)
+                    refreshScreenState()
+                    kotlinx.coroutines.delay(600)
+                    refreshScreenState()
+                }
+            }
+        }
+    }
+
+    private fun isLandscapeNow(): Boolean {
+        val b = wm?.currentWindowMetrics?.bounds ?: return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        return b.width() > b.height()
+    }
+
+    private fun refreshScreenState() {
+        landscape.value = isLandscapeNow()
+        fullscreen.value = false
+        visual?.requestApplyInsets()
+        updatePosition()
+        relayout()
     }
 
     @androidx.compose.runtime.Composable
@@ -417,7 +443,7 @@ class IslandAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        landscape.value = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+        landscape.value = isLandscapeNow()
         updatePosition()
         relayout()
     }
