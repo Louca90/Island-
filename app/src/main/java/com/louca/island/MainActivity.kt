@@ -510,6 +510,14 @@ private fun Home() {
                         Toggle("Ouvrir en charge", "Quand tu branches le téléphone : écran musique en paysage, toujours allumé, même verrouillé. Pochette et contrôles à gauche, paroles à droite, grande horloge s'il n'y a pas de musique. Se ferme quand tu débranches ou d'un double tap.", s.standbyOnCharge) { v ->
                             Prefs.update { it.copy(standbyOnCharge = v) }
                         }
+                        if (s.standbyOnCharge) {
+                            Toggle("Seulement en charge sans fil", "Pas en câble : idéal posé sur un socle à induction.", s.standbyWirelessOnly) { v ->
+                                Prefs.update { it.copy(standbyWirelessOnly = v) }
+                            }
+                            Toggle("Seulement sur l'écran verrouillé", "S'ouvre quand le téléphone est verrouillé et se ferme quand tu le déverrouilles.", s.standbyLockOnly) { v ->
+                                Prefs.update { it.copy(standbyLockOnly = v) }
+                            }
+                        }
                         Spacer(Modifier.height(6.dp))
                         FilledTonalButton(onClick = { IslandStore.openStandby() }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir maintenant") }
                     }

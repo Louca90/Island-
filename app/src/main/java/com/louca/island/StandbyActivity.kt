@@ -117,6 +117,7 @@ class StandbyActivity : ComponentActivity() {
         }
         registerReceiver(unplug, IntentFilter(Intent.ACTION_POWER_DISCONNECTED), Context.RECEIVER_EXPORTED)
         IslandStore.standby.value = true
+        IslandStore.closeStandby = { finish() }
         setContent { Standby { finish() } }
     }
 
@@ -126,6 +127,8 @@ class StandbyActivity : ComponentActivity() {
     override fun onPause() { IslandStore.standby.value = false; super.onPause() }
 
     override fun onDestroy() {
+        if (IslandStore.closeStandby != null) IslandStore.closeStandby = null
+        IslandStore.standbyAuto = false
         runCatching { unregisterReceiver(unplug) }
         IslandStore.standby.value = false
         super.onDestroy()

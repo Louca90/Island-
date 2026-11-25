@@ -58,6 +58,8 @@ data class Settings(
     val deadZonesLock: List<Pair<Float, Float>> = emptyList(),
     val showZones: Boolean = false,
     val standbyOnCharge: Boolean = true,
+    val standbyWirelessOnly: Boolean = true,
+    val standbyLockOnly: Boolean = true,
 )
 
 private fun parseZones(v: String?): List<Pair<Float, Float>> = (v ?: "").split(';').mapNotNull {
@@ -107,6 +109,8 @@ object Prefs {
             deadZonesLock = parseZones(sp.getString("dzLock", "")),
             showZones = sp.getBoolean("dzShow", false),
             standbyOnCharge = sp.getBoolean("standby", true),
+            standbyWirelessOnly = sp.getBoolean("standbyWireless", true),
+            standbyLockOnly = sp.getBoolean("standbyLock", true),
         )
     }
 
@@ -158,6 +162,7 @@ object Prefs {
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
             .putBoolean("lyrics", n.showLyrics).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
             .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones).putBoolean("standby", n.standbyOnCharge)
+            .putBoolean("standbyWireless", n.standbyWirelessOnly).putBoolean("standbyLock", n.standbyLockOnly)
             .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })
             .apply()
     }
@@ -289,7 +294,12 @@ object IslandStore {
     /** True while the charging StandBy screen is showing (the island hides). */
     val standby = MutableStateFlow(false)
 
-    fun openStandby() {
+    /** True when the StandBy screen was opened automatically (so unlocking closes it). */
+    var standbyAuto = false
+    var closeStandby: (() -> Unit)? = null
+
+    fun openStandby(auto: Boolean = false) {
+        standbyAuto = auto
         runCatching {
             appContext.startActivity(
                 android.content.Intent(appContext, StandbyActivity::class.java)

@@ -143,12 +143,15 @@ class IslandAccessibilityService : AccessibilityService() {
                 Intent.ACTION_SCREEN_ON -> {
                     IslandStore.wallTick.value++
                     IslandStore.locked.value = km.isKeyguardLocked
+                    scope.launch { kotlinx.coroutines.delay(400); maybeAutoStandby() }
                     if (s.lockAnim && km.isKeyguardLocked) {
                         IslandStore.upsert(Act(id = "lock", kind = Kind.LOCK, title = "Verrouillé"))
                     }
                 }
                 Intent.ACTION_USER_PRESENT -> {
                     IslandStore.locked.value = false
+                    // Auto StandBy behaves like the iPhone: unlocking closes it.
+                    if (IslandStore.standbyAuto && s.standbyLockOnly) IslandStore.closeStandby?.invoke()
                     val lock = IslandStore.acts.value.find { it.id == "lock" }
                     if (lock != null) IslandStore.upsert(lock.copy(unlocked = true), ttl = 1150)
                     checkShade()
@@ -179,7 +182,7 @@ class IslandAccessibilityService : AccessibilityService() {
                 }
                 Intent.ACTION_POWER_CONNECTED -> {
                     showCharge(first = true)
-                    if (s.standbyOnCharge) scope.launch { kotlinx.coroutines.delay(1200); IslandStore.openStandby() }
+                    scope.launch { kotlinx.coroutines.delay(1500); maybeAutoStandby() }
                 }
                 android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED,
                 android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED,
@@ -289,6 +292,18 @@ class IslandAccessibilityService : AccessibilityService() {
             onTouchZone = ::setZone,
         )
         if (s.showZones) com.louca.island.ui.ZonesOverlay(zones, compactH(s))
+    }
+
+    /** Opens the StandBy screen if the user's conditions are met (charging, wireless only, lock screen only). */
+    private fun maybeAutoStandby() {
+        val s = Prefs.state.value
+        if (!s.standbyOnCharge || IslandStore.standby.value) return
+        val st = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return
+        val plugged = st.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        if (plugged == 0) return
+        if (s.standbyWirelessOnly && plugged != BatteryManager.BATTERY_PLUGGED_WIRELESS) return
+        if (s.standbyLockOnly && !km.isKeyguardLocked) return
+        IslandStore.openStandby(auto = true)
     }
 
     private var camId: String? = null
