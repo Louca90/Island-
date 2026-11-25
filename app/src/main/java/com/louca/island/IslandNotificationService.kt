@@ -255,13 +255,22 @@ class IslandNotificationService : NotificationListenerService() {
 
         when {
             n.category == Notification.CATEGORY_CALL || template.contains("CallStyle") -> {
-                val incoming = !chrono && btns.size >= 2 && !low.contains("en cours") && !low.contains("ongoing")
+                val callCv = if (!chrono) findChrono(n) else null
+                val incoming = !chrono && callCv == null && btns.size >= 2 && !low.contains("en cours") && !low.contains("ongoing") &&
+                    btns.any { Regex("r[ée]pond|answer|accept|d[ée]croch").containsMatchIn(it.label) }
+                val prevCall = IslandStore.acts.value.find { it.id == "call" }
+                val callBase = when {
+                    chrono -> n.`when`
+                    callCv != null -> System.currentTimeMillis() - (SystemClock.elapsedRealtime() - callCv.base)
+                    !incoming && prevCall != null && prevCall.chrono && !prevCall.incoming -> prevCall.base
+                    else -> System.currentTimeMillis()
+                }
                 IslandStore.upsert(
                     Act(
                         id = "call", kind = Kind.CALL, key = sbn.key, pkg = pkg, appName = label(pkg),
                         title = title.ifBlank { "Appel" }, text = text,
                         icon = largeIcon(n), appIcon = appIcon(pkg),
-                        base = n.`when`, chrono = chrono, incoming = incoming,
+                        base = callBase, chrono = !incoming, incoming = incoming,
                         actions = btns, contentIntent = n.contentIntent ?: n.fullScreenIntent,
                     )
                 )
@@ -341,8 +350,9 @@ class IslandNotificationService : NotificationListenerService() {
                         // Chronometer.base is elapsedRealtime-based: convert to wall clock.
                         val wall = System.currentTimeMillis() - (SystemClock.elapsedRealtime() - cv.base)
                         val cd = cv.isCountDown || isCount
+                        val sTotal = ex.getCharSequence("android.ongoingActivityNoti.secondaryInfo")?.toString()?.let { samsungTotal(it) }
                         IslandStore.upsert(act.copy(base = wall, chrono = true, countDown = cd,
-                            duration = if (cd) total(wall - System.currentTimeMillis()) else 0L))
+                            duration = if (cd) (sTotal ?: total(wall - System.currentTimeMillis())) else 0L))
                     }
                     running && tt.isNotEmpty() -> {
                         // No live chronometer exposed: run our own clock from the time shown, keep it stable across updates.
@@ -357,14 +367,10 @@ class IslandNotificationService : NotificationListenerService() {
                     else -> {
                         val raw = tt.ifEmpty { findTime(cv?.text?.toString() ?: "") }
                         if (raw.isEmpty()) {
-                            val (end, left) = scanSamsungTimer(ex)
+                            val (end, sTotal) = scanSamsungTimer(ex)
                             when {
-                                end != null -> IslandStore.upsert(act.copy(base = end, chrono = !paused, countDown = true,
-                                    position = if (paused) (end - System.currentTimeMillis()).coerceAtLeast(0) else 0L,
-                                    duration = total(end - System.currentTimeMillis())))
-                                left != null -> IslandStore.upsert(act.copy(
-                                    base = if (paused) 0L else System.currentTimeMillis() + left, chrono = !paused, countDown = true,
-                                    position = if (paused) left else 0L, timeText = com.louca.island.ui.fmt(left), duration = total(left)))
+                                end != null && !paused -> IslandStore.upsert(act.copy(base = end, chrono = true, countDown = true,
+                                    duration = sTotal ?: total(end - System.currentTimeMillis())))
                                 // Nothing usable: still show it (hourglass + buttons) instead of ignoring it.
                                 btns.isNotEmpty() -> IslandStore.upsert(act.copy(chrono = false, countDown = true,
                                     timeText = if (paused) "Pause" else "En cours"))
@@ -511,27 +517,41 @@ class IslandNotificationService : NotificationListenerService() {
      * Samsung's timer puts nothing in the standard fields: look through every extra for
      * an end time (wall clock or elapsedRealtime) or a "mm:ss" text. Returns (endWallMs, frozenRemainingMs).
      */
+    /**
+     * Samsung timer fallback when no chronometer can be read.
+     * secondaryInfo looks like "5 m / 18:11" = total duration / end time of day. Returns (endWallMs, totalMs).
+     */
     private fun scanSamsungTimer(ex: android.os.Bundle): Pair<Long?, Long?> {
-        val now = System.currentTimeMillis(); val el = SystemClock.elapsedRealtime()
-        var end: Long? = null; var left: Long? = null
-        ex.keySet().forEach { k ->
-            val v = runCatching { @Suppress("DEPRECATION") ex.get(k) }.getOrNull()
-            when (v) {
-                is Long -> when {
-                    k.contains("when", true) -> {}
-                    v in (now + 1000)..(now + 86_400_000) -> end = end ?: v
-                    v in (el + 1000)..(el + 86_400_000) -> end = end ?: (now + (v - el))
-                }
-                is CharSequence -> if (left == null) findTime(v.toString()).takeIf { it.isNotEmpty() }?.let { left = parseTime(it) }
-                else -> {}
-            }
+        val info = ex.getCharSequence("android.ongoingActivityNoti.secondaryInfo")?.toString() ?: return null to null
+        return samsungEnd(info) to samsungTotal(info)
+    }
+
+    private fun samsungTotal(info: String): Long? {
+        var ms = 0L; var found = false
+        Regex("""(\d+)\s*(h|m|min|s)\b""").findAll(info.substringBefore('/')).forEach { m ->
+            val v = m.groupValues[1].toLong(); found = true
+            ms += when (m.groupValues[2]) { "h" -> v * 3_600_000; "s" -> v * 1000; else -> v * 60_000 }
         }
-        return end to left
+        return if (found) ms else null
+    }
+
+    private fun samsungEnd(info: String): Long? {
+        val m = Regex("""(\d{1,2}):(\d{2})""").find(info.substringAfter('/', "")) ?: return null
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, m.groupValues[1].toInt())
+        cal.set(java.util.Calendar.MINUTE, m.groupValues[2].toInt())
+        cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+        var t = cal.timeInMillis
+        if (t < System.currentTimeMillis() - 60_000) t += 86_400_000
+        return t
     }
 
     private fun findChrono(n: Notification): android.widget.Chronometer? {
         @Suppress("DEPRECATION")
-        val views = listOfNotNull(n.contentView, n.bigContentView, n.headsUpContentView)
+        val extraViews = n.extras.keySet().mapNotNull { k ->
+            runCatching { @Suppress("DEPRECATION") n.extras.get(k) as? android.widget.RemoteViews }.getOrNull()
+        }
+        val views = extraViews + listOfNotNull(n.contentView, n.bigContentView, n.headsUpContentView)
         for (rv in views) {
             val v = runCatching { rv.apply(this, android.widget.FrameLayout(this)) }.getOrNull() ?: continue
             findIn(v)?.let { return it }
