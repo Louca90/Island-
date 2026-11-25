@@ -51,6 +51,10 @@ data class Settings(
     val showBuds: Boolean = true,
     val showLyrics: Boolean = true,
     val showShots: Boolean = true,
+    /** Master switch: off hides the island everywhere; StandBy on charge keeps working. */
+    val islandOn: Boolean = true,
+    /** Island turned the Samsung pop-ups back on when it was switched off: put them off again when it comes back. */
+    val popByIsland: Boolean = false,
     val showConn: Boolean = true,
     val showPay: Boolean = true,
     val updateRepo: String = "",
@@ -107,6 +111,8 @@ object Prefs {
             showBuds = sp.getBoolean("buds", true),
             showLyrics = sp.getBoolean("lyrics", true),
             showShots = sp.getBoolean("shots", true),
+            islandOn = sp.getBoolean("on", true),
+            popByIsland = sp.getBoolean("popByIsland", false),
             showConn = sp.getBoolean("conn", true),
             showPay = sp.getBoolean("pay", true),
             updateRepo = sp.getString("repo", "Louca90/Island-")?.let { if (it == "Louca90/Island") "Louca90/Island-" else it } ?: "Louca90/Island-",
@@ -166,7 +172,7 @@ object Prefs {
             .putBoolean("nav", n.showNav).putBoolean("live", n.showLive).putBoolean("sys", n.showSystem)
             .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
-            .putBoolean("lyrics", n.showLyrics).putBoolean("shots", n.showShots).putBoolean("conn", n.showConn).putBoolean("pay", n.showPay).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
+            .putBoolean("lyrics", n.showLyrics).putBoolean("shots", n.showShots).putBoolean("on", n.islandOn).putBoolean("popByIsland", n.popByIsland).putBoolean("conn", n.showConn).putBoolean("pay", n.showPay).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
             .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones).putBoolean("standby", n.standbyOnCharge)
             .putBoolean("standbyWireless", n.standbyWirelessOnly).putBoolean("standbyLock", n.standbyLockOnly)
             .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })

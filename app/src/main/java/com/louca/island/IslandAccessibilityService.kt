@@ -322,7 +322,7 @@ class IslandAccessibilityService : AccessibilityService() {
         val locked by IslandStore.locked.collectAsState()
         val zones = if (locked) s.deadZonesLock else s.deadZones
         val standby by IslandStore.standby.collectAsState()
-        val hidden = land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null || standby
+        val hidden = !s.islandOn || land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null || standby
         val colors = rememberIslandColors(s)
         IslandRoot(
             acts = acts, pick = pick, expandedFlag = expanded, s = s, c = colors, hidden = hidden,

@@ -637,6 +637,15 @@ private fun Home() {
                 }
                 "restore" -> {
                 item {
+                    Card("Désactiver seulement l'île") {
+                        Toggle(
+                            "Île affichée",
+                            "Coupée : plus rien sur la barre d'état et les pop-ups Samsung reviennent, mais le mode veille en charge (sans fil, écran verrouillé) continue de s'ouvrir.",
+                            s.islandOn,
+                        ) { v -> setIslandOn(ctx, v) }
+                    }
+                }
+                item {
                     val secOk = remember(tick) { ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED }
                     var armed by remember { androidx.compose.runtime.mutableStateOf(false) }
                     var done by remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -645,6 +654,7 @@ private fun Home() {
                         Hint(
                             "Arrête l'île, réactive les pop-ups Samsung" + (if (secOk) "" else " (si l'autorisation Termux a été donnée)") +
                                 ", remet les réglages d'Island par défaut et coupe son accès aux notifications. " +
+                                "Le mode veille en charge s'arrête aussi : pour le garder, utilise plutôt l'interrupteur au-dessus. " +
                                 "Ce qu'Island ne peut pas toucher (QuickStar, icônes, Now Bar) est listé juste en dessous."
                         )
                         Spacer(Modifier.height(10.dp))
@@ -764,6 +774,18 @@ private fun Home() {
                     Text("L'île ne peut pas s'afficher sans elles.", fontSize = 13.sp, color = cs.onErrorContainer)
                 }
                 Text("Régler ›", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onErrorContainer)
+            }
+        }
+
+        item {
+            val st by Prefs.state.collectAsState()
+            val ctxH = LocalContext.current
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(cs.surfaceContainerLow).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Toggle(
+                    "Île",
+                    if (st.islandOn) "Affichée sur la barre d'état" else "Désactivée · le mode veille en charge marche toujours",
+                    st.islandOn,
+                ) { v -> setIslandOn(ctxH, v) }
             }
         }
 
@@ -1302,6 +1324,20 @@ private fun CategoryRow(p: PageDef, onClick: () -> Unit) {
             Text(p.subtitle, fontSize = 13.sp, color = cs.onSurfaceVariant)
         }
         Text("›", fontSize = 22.sp, color = cs.onSurfaceVariant)
+    }
+}
+
+/** Island on/off. Off gives the Samsung pop-ups back (if Island had turned them off); on takes them away again. */
+private fun setIslandOn(ctx: android.content.Context, on: Boolean) {
+    val sec = ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val cr = ctx.contentResolver
+    if (!on) {
+        val popsOff = SysSettings.Global.getInt(cr, "heads_up_notifications_enabled", 1) == 0
+        val restored = sec && popsOff && runCatching { SysSettings.Global.putInt(cr, "heads_up_notifications_enabled", 1) }.isSuccess
+        Prefs.update { it.copy(islandOn = false, popByIsland = restored) }
+    } else {
+        if (sec && Prefs.state.value.popByIsland) runCatching { SysSettings.Global.putInt(cr, "heads_up_notifications_enabled", 0) }
+        Prefs.update { it.copy(islandOn = true, popByIsland = false) }
     }
 }
 
