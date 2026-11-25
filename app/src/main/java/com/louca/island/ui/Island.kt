@@ -75,6 +75,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
@@ -352,6 +353,8 @@ fun IslandRoot(
     val press by animateFloatAsState(if (pressed && !ex) .95f else 1f, spring(1f, 900f), label = "p")
     val dragX = remember { Animatable(0f) }
     val dragY = remember { Animatable(0f) }
+    val pullA = remember { Animatable(0f) }   // finger pulling the stack down (px)
+    val swapA = remember { Animatable(0f) }   // 0 → 1: the pill behind rises over the front one
 
     // --- horizontal swipe follows the finger: the current activity slides away, the next one slides in.
     val nextR = remember(acts, pick) { IslandStore.neighbor(1) }
@@ -370,17 +373,19 @@ fun IslandRoot(
     val h = hA.value
     val r = rA.value
     val alpha = alphaA.value
-    class Swipe(val follow: Boolean, val right: Act?, val left: Act?, val dist: (Act?) -> Float)
-    val swipe by rememberUpdatedState(Swipe(follow, nextR, nextL, ::distTo))
+    class Swipe(val follow: Boolean, val right: Act?, val left: Act?, val dist: (Act?) -> Float, val back: Act?)
+    val swipe by rememberUpdatedState(Swipe(follow, nextR, nextL, ::distTo, back))
     LaunchedEffect(primary?.id) {
-        if (swipeTarget != null && primary?.id == swipeTarget) { wA.snapTo(sp.w); dragX.snapTo(0f); swipeTarget = null }
+        if (swipeTarget != null && primary?.id == swipeTarget) {
+            wA.snapTo(sp.w); dragX.snapTo(0f); pullA.snapTo(0f); swapA.snapTo(0f); swipeTarget = null
+        }
     }
 
     // --- touch zone: the visual window never resizes; only an invisible touch window follows the island.
     //     Grow at once, shrink once the animation has settled.
     val side = if (ex) 0f else bubbles.size * (h0.value + 6f)
     val zw = min(max(sp.w.value + side * 2, bubbles.size * (h0.value + 6f)) + 16f, maxW.value)
-    val zh = max(sp.h.value, h0.value) + 8f + (if (ex && bubbles.isNotEmpty()) h0.value + 10f else 0f) + (if (back != null) 10f else 0f)
+    val zh = max(sp.h.value, h0.value) + 8f + (if (ex && bubbles.isNotEmpty()) h0.value + 10f else 0f) + (if (back != null) 34f else 0f)
     var zone by remember { mutableStateOf(0f to 0f) }
     val zoneCb by rememberUpdatedState(onTouchZone)
     LaunchedEffect(zw, zh, visible) {
@@ -422,49 +427,152 @@ fun IslandRoot(
                     }
             )
         }
+        // ---- vertical pull on the stack: 0 → the pill behind becomes the real pill (it follows the finger),
+        //      then on release it rises over the front one while the front one sinks behind it, blurring.
+        val pv = if (settled) 0f else pullA.value
+        val sv = if (settled) 0f else swapA.value
+        val reveal = (pv / with(density) { (h0 * .9f).toPx() }).coerceIn(0f, 1f)
+        val dragMod = Modifier.pointerInput(Unit) {
+                    var dx = 0f; var dy = 0f; var axis = 0
+                    val vt = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                    detectDragGestures(
+                        onDragStart = { dx = 0f; dy = 0f; axis = 0; vt.resetTracking() },
+                        onDragEnd = {
+                            val t = 44.dp.toPx()
+                            val p = primaryState
+                            val sw = swipe
+                            if (axis == 1 && sw.follow) {
+                                val d = if (dx < 0) 1 else -1
+                                val n = if (d == 1) sw.right else sw.left
+                                val vx = vt.calculateVelocity().x
+                                val dd = sw.dist(n)
+                                if (n != null && (abs(dragX.value) > dd * .3f || (abs(vx) > 700.dp.toPx() && vx * dx > 0))) {
+                                    scope.launch {
+                                        dragX.animateTo(-d * dd, spring(1f, 520f), initialVelocity = vx)
+                                        swipedFrom = p?.id
+                                        swipeTarget = n.id
+                                        IslandStore.cycle(d)
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        delay(700)
+                                        if (swipeTarget == n.id) { swipeTarget = null; dragX.snapTo(0f) }
+                                    }
+                                } else scope.launch { dragX.animateTo(0f, spring(1f, 500f), initialVelocity = vx) }
+                                return@detectDragGestures
+                            }
+                            if (axis == 2 && dy > 0f && sw.follow && sw.back != null) {
+                                val vy = vt.calculateVelocity().y
+                                val n = sw.back
+                                val rv = pullA.value / (h0 * .9f).toPx()
+                                if (rv > .45f || vy > 900.dp.toPx()) {
+                                    scope.launch {
+                                        swapA.animateTo(1f, tween(360, easing = FastOutSlowInEasing))
+                                        swipedFrom = p?.id
+                                        swipeTarget = n.id
+                                        IslandStore.cycle(1, vertical = true)
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        delay(700)
+                                        if (swipeTarget == n.id) { swipeTarget = null; pullA.snapTo(0f); swapA.snapTo(0f) }
+                                    }
+                                } else scope.launch { pullA.animateTo(0f, spring(1f, 500f)) }
+                                return@detectDragGestures
+                            }
+                            when {
+                                abs(dx) > abs(dy) && abs(dx) > t -> IslandStore.cycle(if (dx < 0) 1 else -1)
+                                isBig(p) -> {}
+                                dy < -t * .7f -> if (p?.kind == Kind.NOTIF) IslandStore.remove(p.id) else IslandStore.expanded.value = false
+                            }
+                            scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
+                            scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
+                        },
+                        onDragCancel = {
+                            scope.launch { pullA.animateTo(0f, spring(1f, 500f)) }
+                            scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
+                            scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
+                        },
+                    ) { ch, d ->
+                        val k = primaryState?.kind
+                        if (k == Kind.LOCK || k == Kind.CHARGE || k == Kind.SYSTEM || isBig(primaryState)) return@detectDragGestures
+                        ch.consume(); dx += d.x; dy += d.y; poke++
+                        if (axis == 0 && (abs(dx) > 6.dp.toPx() || abs(dy) > 6.dp.toPx())) axis = if (abs(dx) > abs(dy)) 1 else 2
+                        val sw = swipe
+                        if (axis == 1 && sw.follow) {
+                            vt.addPosition(ch.uptimeMillis, ch.position)
+                            val n = if (dx < 0) sw.right else sw.left
+                            // nothing to swipe to: a short rubber band
+                            val v = if (n != null) dx else Math.signum(dx) * min(abs(dx) * .3f, 18.dp.toPx())
+                            scope.launch { dragX.snapTo(v) }
+                        }
+                        // pulling down brings the pill behind out as the real thing, following the finger
+                        if (axis == 2) vt.addPosition(ch.uptimeMillis, ch.position)
+                        if (axis == 2 && sw.follow && sw.back != null)
+                            scope.launch { pullA.snapTo((dy.coerceAtLeast(0f) * .8f).coerceAtMost((h0 + 24.dp).toPx())) }
+                    }
+                }
+
         // ---- the stack: the next live activity waits right behind the pill, smaller, its edge peeking out
-        //      below. Swiping towards it sinks it under the pill while its content slides in; the one that
-        //      left then drops back behind. Tap the edge to bring it forward. Max 2 pills visible.
+        //      below. Untouched it's just an edge; pull down and it turns into the real pill. Max 2 visible.
         val lastBack = remember { arrayOfNulls<Act>(1) }
         if (back != null) lastBack[0] = back
         val backIn by animateFloatAsState(if (back != null) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "bk")
         val bk = back ?: lastBack[0]
         if (bk != null && backIn > .01f) androidx.compose.runtime.key(bk.id) {
             val toward = if (peek != null && peek.id == bk.id) prog else 0f
-            val bw = min(spec(bk, false, s, maxW, zones).w.value, w.value - 18f).coerceAtLeast(h0.value).dp
-            val drop = remember { Animatable(0f) }
+            val fullW = spec(bk, false, s, maxW, zones).w
+            val restW = min(fullW.value, w.value - 18f).coerceAtLeast(h0.value).dp
+            val drop = remember { Animatable(if (bk.id == swipedFrom) 1f else 0f) }
             LaunchedEffect(Unit) { drop.animateTo(1f, tween(380, 90, FastOutSlowInEasing)) }
             val bkId = bk.id
+            val real = max(reveal, sv)
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
+                    .zIndex(if (sv > 0f) 2f else 0f)
                     .graphicsLayer {
                         val k = backIn * drop.value * (1f - toward)
-                        this.alpha = alpha * (.4f + .6f * k)
-                        scaleX = .9f - .04f * (1f - k); scaleY = .9f
+                        val rest = (h0 * .1f + 6.dp).toPx() * k
+                        translationY = (rest + pv * .55f) * (1f - sv)
+                        val sc = androidx.compose.ui.util.lerp(.9f - .04f * (1f - k), 1f, real)
+                        scaleX = sc; scaleY = sc
                         transformOrigin = TransformOrigin(.5f, 0f)
-                        translationY = (h0 * .1f + 6.dp).toPx() * k + dragY.value
-                        val pull = (dragY.value / 22.dp.toPx()).coerceIn(0f, 1f)
-                        scaleX = scaleX + .06f * pull; scaleY = .9f + .06f * pull
-                        this.alpha = alpha * (.4f + .6f * k)
+                        this.alpha = alpha * (.4f + .6f * max(k, real))
                     }
-                    .size(bw, h0)
+                    .size(androidx.compose.ui.unit.lerp(restW, fullW, real), h0)
                     .clip(RoundedCornerShape(h0 / 2))
-                    .background(androidx.compose.ui.graphics.lerp(c.bg, c.fg, .16f))
+                    .background(lerp(lerp(c.bg, c.fg, .16f), c.bg, real))
+                    .then(dragMod)
+                    .pointerInput(bkId) { detectTapGestures { IslandStore.select(bkId) } }
+            ) {
+                if (real > .01f) Box(
+                    Modifier.fillMaxSize()
+                        .graphicsLayer { this.alpha = real }
+                        .blur(((1f - real) * 6f).dp, BlurredEdgeTreatment.Unbounded)
+                ) {
+                    androidx.compose.runtime.CompositionLocalProvider(LocalIconStatic provides true) { Content(bk, false, c, h0) {} }
+                }
+            }
+            // a little grab area under the edge, so a pull that starts just below the pill isn't lost to the app
+            Box(
+                Modifier.align(Alignment.TopCenter).zIndex(-1f).offset(y = h0)
+                    .size(max(w.value, restW.value).dp, 28.dp)
+                    .then(dragMod)
                     .pointerInput(bkId) { detectTapGestures { IslandStore.select(bkId) } }
             )
         }
         Box(
             Modifier
                 .align(Alignment.TopCenter)
+                .zIndex(1f)
                 .graphicsLayer {
-                    this.alpha = alpha
-                    scaleX = press
-                    scaleY = press
+                    this.alpha = alpha * (1f - .25f * reveal - .45f * sv)
+                    val fk = max(reveal * .5f, sv)
+                    scaleX = press * (1f - .1f * fk)
+                    scaleY = press * (1f - .1f * fk)
                     transformOrigin = TransformOrigin(.5f, 0f)
-                    // while smaller than the pill (birth/death), stay centred on the camera hole
-                    translationY = ((h0 - h) / 2).coerceAtLeast(0.dp).toPx()
+                    // while smaller than the pill (birth/death), stay centred on the camera hole;
+                    // during a stack swap, sink into the slot behind
+                    translationY = ((h0 - h) / 2).coerceAtLeast(0.dp).toPx() + (h0 * .1f + 6.dp).toPx() * sv
                 }
+                .blur((reveal * 3f + sv * 10f).dp, BlurredEdgeTreatment.Unbounded)
                 .size(w, h)
                 .clip(RoundedCornerShape(r))
                 .background(c.bg)
@@ -508,68 +616,7 @@ fun IslandRoot(
                         },
                     )
                 }
-                .pointerInput(Unit) {
-                    var dx = 0f; var dy = 0f; var axis = 0
-                    val vt = androidx.compose.ui.input.pointer.util.VelocityTracker()
-                    detectDragGestures(
-                        onDragStart = { dx = 0f; dy = 0f; axis = 0; vt.resetTracking() },
-                        onDragEnd = {
-                            val t = 44.dp.toPx()
-                            val p = primaryState
-                            val sw = swipe
-                            if (axis == 1 && sw.follow) {
-                                val d = if (dx < 0) 1 else -1
-                                val n = if (d == 1) sw.right else sw.left
-                                val vx = vt.calculateVelocity().x
-                                val dd = sw.dist(n)
-                                if (n != null && (abs(dragX.value) > dd * .3f || (abs(vx) > 700.dp.toPx() && vx * dx > 0))) {
-                                    scope.launch {
-                                        dragX.animateTo(-d * dd, spring(1f, 520f), initialVelocity = vx)
-                                        swipedFrom = p?.id
-                                        swipeTarget = n.id
-                                        IslandStore.cycle(d)
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                        delay(700)
-                                        if (swipeTarget == n.id) { swipeTarget = null; dragX.snapTo(0f) }
-                                    }
-                                } else scope.launch { dragX.animateTo(0f, spring(1f, 500f), initialVelocity = vx) }
-                                return@detectDragGestures
-                            }
-                            when {
-                                abs(dx) > abs(dy) && abs(dx) > t -> IslandStore.cycle(if (dx < 0) 1 else -1)
-                                isBig(p) -> {}
-                                dy < -t * .7f -> if (p?.kind == Kind.NOTIF) IslandStore.remove(p.id) else IslandStore.expanded.value = false
-                                dy > t * .7f && p != null && !p.urgent && !IslandStore.expanded.value -> {
-                                    if (IslandStore.neighbor(1) != null) {
-                                        IslandStore.cycle(1, vertical = true)
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                    }
-                                }
-                            }
-                            scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
-                            scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
-                        },
-                        onDragCancel = {
-                            scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
-                            scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
-                        },
-                    ) { ch, d ->
-                        val k = primaryState?.kind
-                        if (k == Kind.LOCK || k == Kind.CHARGE || k == Kind.SYSTEM || isBig(primaryState)) return@detectDragGestures
-                        ch.consume(); dx += d.x; dy += d.y; poke++
-                        if (axis == 0 && (abs(dx) > 6.dp.toPx() || abs(dy) > 6.dp.toPx())) axis = if (abs(dx) > abs(dy)) 1 else 2
-                        val sw = swipe
-                        if (axis == 1 && sw.follow) {
-                            vt.addPosition(ch.uptimeMillis, ch.position)
-                            val n = if (dx < 0) sw.right else sw.left
-                            // nothing to swipe to: a short rubber band
-                            val v = if (n != null) dx else Math.signum(dx) * min(abs(dx) * .3f, 18.dp.toPx())
-                            scope.launch { dragX.snapTo(v) }
-                        }
-                        // pulling down draws the activity behind out a little, like a card about to come forward
-                        if (axis == 2 && dy > 0f && sw.follow) scope.launch { dragY.snapTo(min(dy * .45f, 22.dp.toPx())) }
-                    }
-                },
+                .then(dragMod),
         ) {
             val key = CKey(primary?.id, primary?.kind, ex)
             // How this change animates: [0] blur (open/close, new arrival — never when sliding between
