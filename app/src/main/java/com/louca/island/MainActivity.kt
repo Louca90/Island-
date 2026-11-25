@@ -334,7 +334,12 @@ private fun Home() {
     ) {
         item {
             Column(Modifier.fillMaxWidth().height(190.dp).padding(start = 8.dp, bottom = 10.dp), verticalArrangement = Arrangement.Bottom) {
-                Text("Island", fontSize = 40.sp, fontWeight = FontWeight.Normal, color = cs.onSurface)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("Island", fontSize = 40.sp, fontWeight = FontWeight.Normal, color = cs.onSurface)
+                    Spacer(Modifier.width(10.dp))
+                    val ver = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
+                    Text("v$ver", fontSize = 15.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     if (ready) "Active sur ton S24" else "Encore quelques réglages",

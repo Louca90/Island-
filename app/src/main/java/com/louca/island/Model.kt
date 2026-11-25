@@ -402,7 +402,9 @@ object IslandStore {
     }
 
     fun others(l: List<Act>, p: Act?): List<Act> =
-        l.filter { it.id != p?.id && !it.urgent }.sortedByDescending { it.kind.prio }.take(3)
+        l.filter { it.id != p?.id && !it.urgent }
+            .sortedWith(compareByDescending<Act> { it.kind == Kind.INBOX }.thenByDescending { it.kind.prio })
+            .take(3)
 
     fun cycle(dir: Int) {
         val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }

@@ -456,6 +456,14 @@ fun IslandRoot(
             for (k in 0 until 6) { val off = -(sp.w.value / 2 + 6f + h0.value / 2 + k * (h0.value + 6f)); if (free(off)) out += -1 to k else break }
             out
         }
+        // No room for the notifications bubble (dead zones)? Pin its counter on the island's corner instead.
+        val inboxIdx = bubbles.indexOfFirst { it.kind == Kind.INBOX }
+        if (!ex && inboxIdx >= 0 && slots.getOrNull(inboxIdx) == null) {
+            CountBadge(
+                bubbles[inboxIdx].level, c,
+                Modifier.align(Alignment.TopCenter).offset(x = w / 2 - 8.dp, y = h0 - 13.dp).graphicsLayer { this.alpha = alpha }
+            )
+        }
         bubbles.forEachIndexed { i, b ->
             val slot = slots.getOrNull(i)
             if (!ex && slot == null) return@forEachIndexed
