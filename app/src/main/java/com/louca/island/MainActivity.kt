@@ -435,6 +435,18 @@ private fun Home() {
                         runCatching { SysSettings.Global.putInt(ctx.contentResolver, "heads_up_notifications_enabled", if (v) 0 else 1) }
                             .onSuccess { popOff = v }
                     }
+                    if (popOff) {
+                        Spacer(Modifier.height(6.dp))
+                        Step(
+                            "Indispensable : style « Détaillé »",
+                            "One UI ignore ce réglage pour ses pop-ups au style « Bref » (la petite pilule). Va dans Notifications › Style des notifications pop-up et choisis « Détaillé » : plus aucun bandeau, seulement l'île.",
+                            false, "Ouvrir",
+                        ) {
+                            runCatching {
+                                ctx.startActivity(Intent("android.settings.NOTIFICATION_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }.onFailure { ctx.startActivity(Intent(SysSettings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        }
+                    }
                 } else {
                     Hint("Android exige une autorisation donnée une seule fois par ADB. Dans Termux, une fois connecté (adb connect), lance cette commande :")
                     Spacer(Modifier.height(8.dp))
@@ -868,7 +880,7 @@ private val guideSteps = listOf(
         "Dernière commande, à coller telle quelle. Elle ne renvoie rien si tout va bien.",
         cmd = "adb shell pm grant com.louca.island android.permission.WRITE_SECURE_SETTINGS"),
     GStep("C'est fait",
-        "Reviens dans Island : l'interrupteur « Désactiver les pop-ups » est apparu dans la carte Pop-ups Samsung. Tu peux couper le débogage sans fil, l'autorisation reste.\n\nEn cas de souci :\n• « failed to connect » : le port change à chaque activation, reprends-le à l'étape 7.\n• « protocol fault » : vérifie que tu as tapé IP:PORT sans « localhost: » devant, redemande un code (étape 6), et si ça persiste fais « pkg upgrade -y android-tools ».\n• « Unknown package » : vérifie que tu as bien installé Island avant."),
+        "Reviens dans Island : l'interrupteur « Désactiver les pop-ups » est apparu dans la carte Pop-ups Samsung. Active-le, puis passe Paramètres › Notifications › Style des notifications pop-up sur « Détaillé » (sinon One UI garde ses petits bandeaux). Tu peux couper le débogage sans fil, l'autorisation reste.\n\nEn cas de souci :\n• « failed to connect » : le port change à chaque activation, reprends-le à l'étape 7.\n• « protocol fault » : vérifie que tu as tapé IP:PORT sans « localhost: » devant, redemande un code (étape 6), et si ça persiste fais « pkg upgrade -y android-tools ».\n• « Unknown package » : vérifie que tu as bien installé Island avant."),
 )
 
 @Composable
