@@ -84,6 +84,20 @@ class IslandNotificationService : NotificationListenerService() {
                     .append(cv.isCountDown).append(" texte=").append(cv.text)
             }
             sb.append('\n')
+            sb.append("  extras :").append('\n')
+            ex.keySet().sorted().forEach { k ->
+                val v = runCatching { @Suppress("DEPRECATION") ex.get(k) }.getOrNull()
+                val txt = when (v) {
+                    null -> "null"
+                    is android.graphics.Bitmap, is android.graphics.drawable.Icon -> "[image]"
+                    is Long -> "$v" + describeTime(v, now)
+                    is Int -> "$v"
+                    is LongArray -> v.joinToString(",", "[", "]")
+                    is Array<*> -> v.joinToString(",", "[", "]") { it.toString().take(40) }
+                    else -> v.toString().take(120)
+                }
+                sb.append("    ").append(k).append(" = ").append(txt).append('\n')
+            }
             IslandStore.acts.value.find { it.key == sbn.key }?.let { a ->
                 sb.append("  → Island: ").append(a.kind).append(" chrono=").append(a.chrono).append(" rebours=").append(a.countDown)
                     .append(" base=").append((a.base - now) / 1000).append("s texte=").append(a.timeText)
@@ -342,7 +356,21 @@ class IslandNotificationService : NotificationListenerService() {
                     }
                     else -> {
                         val raw = tt.ifEmpty { findTime(cv?.text?.toString() ?: "") }
-                        if (raw.isEmpty()) return
+                        if (raw.isEmpty()) {
+                            val (end, left) = scanSamsungTimer(ex)
+                            when {
+                                end != null -> IslandStore.upsert(act.copy(base = end, chrono = !paused, countDown = true,
+                                    position = if (paused) (end - System.currentTimeMillis()).coerceAtLeast(0) else 0L,
+                                    duration = total(end - System.currentTimeMillis())))
+                                left != null -> IslandStore.upsert(act.copy(
+                                    base = if (paused) 0L else System.currentTimeMillis() + left, chrono = !paused, countDown = true,
+                                    position = if (paused) left else 0L, timeText = com.louca.island.ui.fmt(left), duration = total(left)))
+                                // Nothing usable: still show it (hourglass + buttons) instead of ignoring it.
+                                btns.isNotEmpty() -> IslandStore.upsert(act.copy(chrono = false, countDown = true,
+                                    timeText = if (paused) "Pause" else "En cours"))
+                            }
+                            return
+                        }
                         IslandStore.upsert(act.copy(chrono = false, timeText = com.louca.island.ui.fmt(parseTime(raw))))
                     }
                 }
@@ -468,6 +496,37 @@ class IslandNotificationService : NotificationListenerService() {
             }?.filter { it.second.isNotBlank() } ?: emptyList()
             if (lines.isNotEmpty()) handler.post { IslandStore.lyrics.value = Lyrics(key, lines) }
         }
+    }
+
+    private fun describeTime(v: Long, now: Long): String {
+        val el = SystemClock.elapsedRealtime()
+        return when {
+            v in (now - 86_400_000)..(now + 86_400_000) -> "  (heure murale ${(v - now) / 1000}s)"
+            v in (el - 86_400_000)..(el + 86_400_000) && v > 0 -> "  (horloge système ${(v - el) / 1000}s)"
+            else -> ""
+        }
+    }
+
+    /**
+     * Samsung's timer puts nothing in the standard fields: look through every extra for
+     * an end time (wall clock or elapsedRealtime) or a "mm:ss" text. Returns (endWallMs, frozenRemainingMs).
+     */
+    private fun scanSamsungTimer(ex: android.os.Bundle): Pair<Long?, Long?> {
+        val now = System.currentTimeMillis(); val el = SystemClock.elapsedRealtime()
+        var end: Long? = null; var left: Long? = null
+        ex.keySet().forEach { k ->
+            val v = runCatching { @Suppress("DEPRECATION") ex.get(k) }.getOrNull()
+            when (v) {
+                is Long -> when {
+                    k.contains("when", true) -> {}
+                    v in (now + 1000)..(now + 86_400_000) -> end = end ?: v
+                    v in (el + 1000)..(el + 86_400_000) -> end = end ?: (now + (v - el))
+                }
+                is CharSequence -> if (left == null) findTime(v.toString()).takeIf { it.isNotEmpty() }?.let { left = parseTime(it) }
+                else -> {}
+            }
+        }
+        return end to left
     }
 
     private fun findChrono(n: Notification): android.widget.Chronometer? {
