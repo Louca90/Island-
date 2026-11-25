@@ -373,6 +373,10 @@ fun IslandRoot(
     val h = hA.value
     val r = rA.value
     val alpha = alphaA.value
+    // whatever interrupts a pull (a status or screenshot taking over, the island opening…) puts the stack back
+    LaunchedEffect(follow, back?.id, ex) {
+        if (swipeTarget == null && swapA.value == 0f && pullA.value != 0f && (!follow || back == null || ex)) pullA.animateTo(0f, spring(1f, 500f))
+    }
     class Swipe(val follow: Boolean, val right: Act?, val left: Act?, val dist: (Act?) -> Float, val back: Act?)
     val swipe by rememberUpdatedState(Swipe(follow, nextR, nextL, ::distTo, back))
     LaunchedEffect(primary?.id) {
@@ -483,6 +487,7 @@ fun IslandRoot(
                             }
                             scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
                             scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
+                            scope.launch { if (swapA.value == 0f) pullA.animateTo(0f, spring(1f, 500f)) }
                         },
                         onDragCancel = {
                             scope.launch { pullA.animateTo(0f, spring(1f, 500f)) }
@@ -716,7 +721,7 @@ fun IslandRoot(
                 ) {
                     if (a != null) androidx.compose.runtime.CompositionLocalProvider(
                         LocalIconPhase provides iconPhase, LocalIconStatic provides !iconFx,
-                        LocalShared provides sharedScope, LocalAvs provides (if (iconFx) this@AnimatedContent else null),
+                        LocalShared provides sharedScope, LocalAvs provides this@AnimatedContent,
                     ) {
                         Content(a, k.ex, c, h0) { poke++ }
                     }
