@@ -463,23 +463,23 @@ object IslandStore {
     /** Live activities you swipe between (notifications keep their own bubble). */
     private fun swipeable() = acts.value.filterNot { it.urgent || it.kind == Kind.INBOX }.sortedBy { it.kind.prio }
 
-    fun cycle(dir: Int) {
-        val l = swipeable()
-        if (l.size < 2) return
-        val cur = primary(acts.value, pick.value)
-        val i = l.indexOfFirst { it.id == cur?.id }.coerceAtLeast(0)
-        swipeDir.value = dir
-        pick.value = l[(i + dir + l.size) % l.size].id
+    /** Next live activity; [vertical] = pulled down from the stack behind the pill. */
+    fun cycle(dir: Int, vertical: Boolean = false) {
+        val n = neighbor(dir) ?: return
+        swipeDir.value = if (vertical) 2 else dir
+        pick.value = n.id
         expanded.value = false
     }
 
     /** The activity a horizontal swipe would bring in ([dir] = 1: from the right). */
     fun neighbor(dir: Int): Act? {
         val l = swipeable()
-        if (l.size < 2) return null
-        val cur = primary(acts.value, pick.value) ?: return null
+        if (l.isEmpty()) return null
+        val cur = primary(acts.value, pick.value) ?: return l.first()
         val i = l.indexOfFirst { it.id == cur.id }
-        if (i < 0) return null
+        // looking at the notifications: the way back is the first live activity
+        if (i < 0) return if (cur.urgent) null else if (dir > 0) l.first() else l.last()
+        if (l.size < 2) return null
         return l[(i + dir + l.size) % l.size]
     }
 

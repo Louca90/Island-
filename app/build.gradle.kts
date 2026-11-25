@@ -10,8 +10,8 @@ android {
         applicationId = "com.louca.island"
         minSdk = 31
         targetSdk = 35
-        versionCode = 33
-        versionName = "4.2"
+        versionCode = 34
+        versionName = "4.3"
     }
     signingConfigs {
         create("island") {

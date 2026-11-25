@@ -254,7 +254,7 @@ fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp, zones: List<Pair<Float, 
         Kind.SYSTEM -> if (ex) Spec(big, 84.dp, 40.dp) else pill(if (a.variant in 7..16) 236f else 204f)
         Kind.PAY -> when {
             ex && a.variant == 1 -> Spec(big, 84.dp, 40.dp)
-            ex -> Spec(big, 132.dp, 40.dp)
+            ex -> Spec(big, if (a.level == 0 && a.pkg.isNotBlank()) 132.dp else 84.dp, 40.dp)
             a.variant == 1 -> pill(250f)
             a.variant == 2 -> pill(262f)
             else -> pill(316f)
@@ -298,9 +298,9 @@ fun IslandRoot(
     val lyrOpen by IslandStore.lyricsOpen.collectAsState()
     lyr?.key; lyrOpen
     notifList.size + inboxIdx + (replyKey?.length ?: 0)
-    val others = if (primary?.kind == Kind.NOTIF) emptyList() else IslandStore.others(acts, primary)
+    val others = IslandStore.others(acts, primary)
     // notifications keep their little bubble; live activities stack behind the pill instead
-    val bubbles = others.filter { it.kind == Kind.INBOX }
+    val bubbles = if (primary?.kind == Kind.NOTIF) emptyList() else others.filter { it.kind == Kind.INBOX }
     val sp = spec(primary, expandedFlag, s, maxW, zones)
     val h0 = compactH(s)
     val visible = !hidden && (primary != null || s.showIdle)
@@ -443,7 +443,10 @@ fun IslandRoot(
                         this.alpha = alpha * (.4f + .6f * k)
                         scaleX = .9f - .04f * (1f - k); scaleY = .9f
                         transformOrigin = TransformOrigin(.5f, 0f)
-                        translationY = (h0 * .1f + 6.dp).toPx() * k
+                        translationY = (h0 * .1f + 6.dp).toPx() * k + dragY.value
+                        val pull = (dragY.value / 22.dp.toPx()).coerceIn(0f, 1f)
+                        scaleX = scaleX + .06f * pull; scaleY = .9f + .06f * pull
+                        this.alpha = alpha * (.4f + .6f * k)
                     }
                     .size(bw, h0)
                     .clip(RoundedCornerShape(h0 / 2))
@@ -536,7 +539,12 @@ fun IslandRoot(
                                 abs(dx) > abs(dy) && abs(dx) > t -> IslandStore.cycle(if (dx < 0) 1 else -1)
                                 isBig(p) -> {}
                                 dy < -t * .7f -> if (p?.kind == Kind.NOTIF) IslandStore.remove(p.id) else IslandStore.expanded.value = false
-                                dy > t * .7f && p != null && p.kind != Kind.NOTIF -> IslandStore.expanded.value = true
+                                dy > t * .7f && p != null && !p.urgent && !IslandStore.expanded.value -> {
+                                    if (IslandStore.neighbor(1) != null) {
+                                        IslandStore.cycle(1, vertical = true)
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    }
+                                }
                             }
                             scope.launch { dragX.animateTo(0f, spring(1f, 500f)) }
                             scope.launch { dragY.animateTo(0f, spring(1f, 500f)) }
@@ -558,6 +566,8 @@ fun IslandRoot(
                             val v = if (n != null) dx else Math.signum(dx) * min(abs(dx) * .3f, 18.dp.toPx())
                             scope.launch { dragX.snapTo(v) }
                         }
+                        // pulling down draws the activity behind out a little, like a card about to come forward
+                        if (axis == 2 && dy > 0f && sw.follow) scope.launch { dragY.snapTo(min(dy * .45f, 22.dp.toPx())) }
                     }
                 },
         ) {
@@ -593,6 +603,14 @@ fun IslandRoot(
                     val opening = !initialState.ex && targetState.ex
                     val same = initialState.id == targetState.id
                     val lateral = !same && (initialState.kind?.prio ?: 9) < 5 && (targetState.kind?.prio ?: 9) < 5
+                    if (lateral && dir == 2) return@AnimatedContent (
+                        fadeIn(tween(220, 60)) +
+                            scaleIn(tween(340, easing = FastOutSlowInEasing), .9f, TransformOrigin(.5f, 1f)) +
+                            slideInVertically(tween(340, easing = FastOutSlowInEasing)) { it / 2 }
+                        ).togetherWith(
+                            fadeOut(tween(140)) + scaleOut(tween(260), .88f, TransformOrigin(.5f, 0f)) +
+                                slideOutVertically(tween(260)) { -it / 4 }
+                        ).using(SizeTransform(clip = false) { _, _ -> snap() })
                     val d = if (lateral) dir else 0
                     (fadeIn(tween(200, if (opening) 150 else 70)) +
                         scaleIn(tween(320, if (opening) 110 else 30, FastOutSlowInEasing), if (same) .96f else .9f, TransformOrigin(.5f, .1f)) +
@@ -1196,7 +1214,8 @@ private fun PayBig(a: Act, c: IslandColors) {
     }
     fun go(i: android.content.Intent) = runCatching { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
     val nfcOff = a.level == 0
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.SpaceBetween) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = if (nfcOff) Arrangement.SpaceBetween else Arrangement.Center) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.shared("${a.id}:ic").size(44.dp).clip(CircleShape).background(c.btn), contentAlignment = Alignment.Center) {
                 if (a.variant == 2) FingerprintIcon(c.fg, 28.dp) else NfcIcon(c.fg, 26.dp)
@@ -1208,16 +1227,9 @@ private fun PayBig(a: Act, c: IslandColors) {
             }
             if (a.pkg.isNotBlank()) CardChip(payColor(a, c), 46.dp, Modifier.shared("${a.id}:card"))
         }
-        if (a.pkg.isNotBlank()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ShotBtn("Changer de carte", c.btn, c.fg, Modifier.weight(1f)) {
-                ctx.packageManager.getLaunchIntentForPackage(a.pkg)?.let { go(it) }
-                IslandStore.expanded.value = false
-            }
-            ShotBtn(if (nfcOff) "Activer le NFC" else "App par défaut", if (nfcOff) c.red.copy(alpha = .2f) else c.btn,
-                if (nfcOff) c.red else c.fg, Modifier.weight(1f)) {
-                go(android.content.Intent(if (nfcOff) android.provider.Settings.ACTION_NFC_SETTINGS else android.provider.Settings.ACTION_NFC_PAYMENT_SETTINGS))
-                IslandStore.expanded.value = false
-            }
+        if (nfcOff && a.pkg.isNotBlank()) ShotBtn("Activer le NFC", c.red.copy(alpha = .2f), c.red, Modifier.fillMaxWidth()) {
+            go(android.content.Intent(android.provider.Settings.ACTION_NFC_SETTINGS))
+            IslandStore.expanded.value = false
         }
     }
 }
@@ -1678,8 +1690,53 @@ private fun CallExpanded(a: Act, c: IslandColors) {
     }
 }
 
+/** In the notifications: the live activities (player, timer, route…) to jump straight back to. */
 @Composable
-private fun NotifBody(a: Act, c: IslandColors, poke: () -> Unit, counter: String?, onAction: () -> Unit, onDismiss: (() -> Unit)? = null) {
+private fun BackToLive(c: IslandColors, poke: () -> Unit) {
+    val all by IslandStore.acts.collectAsState()
+    val live = all.filter { !it.urgent && it.kind != Kind.INBOX }.sortedBy { it.kind.prio }.take(3)
+    if (live.isEmpty()) return
+    Row(
+        Modifier.padding(end = 6.dp).height(24.dp).clip(RoundedCornerShape(12.dp)).background(c.btn)
+            .pointerInput(live.first().id) { detectTapGestures { poke(); IslandStore.select(live.first().id) } }
+            .padding(start = 6.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // chevron "back"
+        androidx.compose.foundation.Canvas(Modifier.size(8.dp, 10.dp)) {
+            val w = size.width; val h = size.height
+            drawLine(c.dim, androidx.compose.ui.geometry.Offset(w * .8f, h * .1f), androidx.compose.ui.geometry.Offset(w * .2f, h * .5f), w * .28f, androidx.compose.ui.graphics.StrokeCap.Round)
+            drawLine(c.dim, androidx.compose.ui.geometry.Offset(w * .2f, h * .5f), androidx.compose.ui.geometry.Offset(w * .8f, h * .9f), w * .28f, androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+        live.forEach { l ->
+            Box(Modifier.size(18.dp).pointerInput(l.id) { detectTapGestures { poke(); IslandStore.select(l.id) } }, contentAlignment = Alignment.Center) {
+                MiniActIcon(l, c, 16.dp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniActIcon(a: Act, c: IslandColors, size: Dp) {
+    when (a.kind) {
+        Kind.MUSIC -> {
+            val art = a.art
+            if (art != null) Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(size).clip(RoundedCornerShape(4.dp)))
+            else Equalizer(a.playing, musicAccent(a, c), size)
+        }
+        Kind.TIMER -> if (a.variant == 1) SmallAppIcon(a, c, size) else if (a.countDown) HourglassIcon(c.orange, size) else StopwatchIcon(rememberSeconds(a), c.orange, size)
+        Kind.RECORD -> if (a.variant == 1) MicIcon(c.red, size) else ScreenRecIcon(c.red, size)
+        Kind.NAV -> NavIcon(a, c, size)
+        Kind.TORCH -> FlashIcon(c.yellow, size, on = true)
+        Kind.EVENT -> CalendarIcon(c.fg, size)
+        else -> SmallAppIcon(a, c, size)
+    }
+}
+
+@Composable
+private fun NotifBody(a: Act, c: IslandColors, poke: () -> Unit, counter: String?, onAction: () -> Unit, onDismiss: (() -> Unit)? = null,
+                      back: (@Composable () -> Unit)? = null) {
     val replyKey by IslandStore.replying.collectAsState()
     val lyr by IslandStore.lyrics.collectAsState()
     val lyrOpen by IslandStore.lyricsOpen.collectAsState()
@@ -1692,6 +1749,7 @@ private fun NotifBody(a: Act, c: IslandColors, poke: () -> Unit, counter: String
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     T("${a.appName} · ${a.ago()}", c.dim, 12, modifier = Modifier.weight(1f))
+                    back?.invoke()
                     if (counter != null) T(counter, c.dim, 12, style = Num)
                     if (onDismiss != null) {
                         Tap(26.dp, "Supprimer la notification", { poke(); onDismiss() }) {
@@ -1865,6 +1923,7 @@ private fun InboxCard(c: IslandColors, poke: () -> Unit) {
                         counter = if (list.size > 1) "${list.indexOfFirst { it.key == k } + 1}/${list.size}" else null,
                         onAction = {},
                         onDismiss = { IslandStore.dismissNotif(a.key) },
+                        back = { BackToLive(c, poke) },
                     )
                 }
             }
