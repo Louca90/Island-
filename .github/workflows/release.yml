@@ -15,8 +15,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -27,7 +27,13 @@ jobs:
         id: v
         run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
       - name: Build
-        run: gradle assembleRelease --no-daemon
+        # Dependency downloads sometimes fail on the runner ("Too many retries"): try up to 3 times.
+        run: |
+          for i in 1 2 3; do
+            gradle assembleRelease --no-daemon && exit 0
+            echo "Build attempt $i failed, retrying in 30 s…"; sleep 30
+          done
+          exit 1
       - name: Rename
         run: cp app/build/outputs/apk/release/app-release.apk "Island-v${{ steps.v.outputs.name }}.apk"
       - name: Publish release
