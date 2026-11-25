@@ -37,10 +37,19 @@ jobs:
       - name: Rename
         run: cp app/build/outputs/apk/release/app-release.apk "Island-v${{ steps.v.outputs.name }}.apk"
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.v.outputs.name }}
-          name: Island v${{ steps.v.outputs.name }}
-          target_commitish: ${{ github.sha }}
-          files: Island-*.apk
-          body: "APK signé, s'installe par-dessus la version précédente. Détails dans l'historique des commits."
+        # GitHub's release API sometimes answers 500: retry, and if the release already
+        # exists (half-created by a failed attempt), just (re)upload the APK into it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.v.outputs.name }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" Island-*.apk --clobber && gh release edit "$TAG" --draft=false --latest && exit 0
+            else
+              gh release create "$TAG" Island-*.apk --target "$GITHUB_SHA" --title "Island $TAG" \
+                --notes "APK signé, s'installe par-dessus la version précédente." --latest && exit 0
+            fi
+            echo "Attempt $i failed, retrying in 20 s…"; sleep 20
+          done
+          exit 1
