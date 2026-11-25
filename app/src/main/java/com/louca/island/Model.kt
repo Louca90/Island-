@@ -454,6 +454,16 @@ object IslandStore {
         expanded.value = false
     }
 
+    /** The activity a horizontal swipe would bring in ([dir] = 1: from the right). */
+    fun neighbor(dir: Int): Act? {
+        val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }
+        if (l.size < 2) return null
+        val cur = primary(acts.value, pick.value) ?: return null
+        val i = l.indexOfFirst { it.id == cur.id }
+        if (i < 0) return null
+        return l[(i + dir + l.size) % l.size]
+    }
+
     fun select(id: String) {
         val cur = primary(acts.value, pick.value)
         val l = acts.value.filterNot { it.urgent }.sortedBy { it.kind.prio }

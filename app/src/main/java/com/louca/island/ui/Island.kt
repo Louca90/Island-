@@ -22,6 +22,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -70,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -102,6 +106,7 @@ import com.louca.island.Kind
 import com.louca.island.Settings
 import com.louca.island.ThemeMode
 import com.louca.island.sendPending
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -265,19 +270,73 @@ fun IslandRoot(
     val h0 = compactH(s)
     val visible = !hidden && (primary != null || s.showIdle)
 
-    val grow = spring<Dp>(dampingRatio = 1f, stiffness = 380f)
-    val shrink = spring<Dp>(dampingRatio = 1f, stiffness = 520f)
-    val w by animateDpAsState(sp.w, if (ex) grow else shrink, label = "w")
-    val h by animateDpAsState(sp.h, if (ex) grow else shrink, label = "h")
-    val r by animateDpAsState(sp.r, if (ex) grow else shrink, label = "r")
-    val alpha by animateFloatAsState(if (visible) 1f else 0f, tween(if (visible) 160 else 240), label = "a")
-    val vScale by animateFloatAsState(if (visible) 1f else .55f, spring(1f, 500f), label = "vs")
+    // --- size. The island is born from the camera hole and dies back into it.
+    //     Growing: width leads, height follows. Shrinking: height leads, width follows.
+    val cam = s.camSize.coerceIn(8f, h0.value).dp
+    val wA = remember { Animatable(cam, Dp.VectorConverter) }
+    val hA = remember { Animatable(cam, Dp.VectorConverter) }
+    val rA = remember { Animatable(cam / 2, Dp.VectorConverter) }
+    val alphaA = remember { Animatable(0f) }
+    var shown by remember { mutableStateOf(false) }
+    var swipeTarget by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(sp.w, sp.h, sp.r, visible) {
+        if (!visible) {
+            if (shown) {
+                shown = false
+                val t = tween<Dp>(240, easing = FastOutSlowInEasing)
+                coroutineScope {
+                    launch { wA.animateTo(cam, t) }
+                    launch { hA.animateTo(cam, tween(190, easing = FastOutSlowInEasing)) }
+                    launch { rA.animateTo(cam / 2, t) }
+                }
+            }
+            alphaA.animateTo(0f, tween(110))
+            return@LaunchedEffect
+        }
+        if (!shown) {
+            shown = true
+            wA.snapTo(cam); hA.snapTo(cam); rA.snapTo(cam / 2); alphaA.snapTo(1f)
+            val t = tween<Dp>(170, easing = FastOutSlowInEasing)
+            coroutineScope {
+                launch { wA.animateTo(h0, t) }; launch { hA.animateTo(h0, t) }; launch { rA.animateTo(h0 / 2, t) }
+            }
+        }
+        val growing = sp.h > hA.value + 1.dp
+        val shrinking = sp.h < hA.value - 1.dp
+        val sp1 = spring<Dp>(1f, if (shrinking) 520f else 380f)
+        coroutineScope {
+            launch { if (shrinking) delay(70); wA.animateTo(sp.w, sp1) }
+            launch { if (growing) delay(80); hA.animateTo(sp.h, sp1) }
+            launch { if (growing) delay(80); rA.animateTo(sp.r, sp1) }
+        }
+    }
 
     var pressed by remember { mutableStateOf(false) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val press by animateFloatAsState(if (pressed && !ex) .95f else 1f, spring(1f, 900f), label = "p")
     val dragX = remember { Animatable(0f) }
     val dragY = remember { Animatable(0f) }
+
+    // --- horizontal swipe follows the finger: the current activity slides away, the next one slides in.
+    val nextR = remember(acts, pick) { IslandStore.neighbor(1) }
+    val nextL = remember(acts, pick) { IslandStore.neighbor(-1) }
+    val follow = !ex && primary != null && !primary.urgent && !isBig(primary)
+    val settled = swipeTarget != null && primary?.id == swipeTarget
+    val off = if (settled) 0f else dragX.value
+    val peek = when { off < 0 -> nextR; off > 0 -> nextL; else -> null }
+    fun distTo(n: Act?): Float = n?.let { with(density) { ((wA.value + spec(it, false, s, maxW, zones).w) / 2 + 10.dp).toPx() } } ?: 0f
+    val peekW = peek?.let { spec(it, false, s, maxW, zones).w } ?: sp.w
+    val dist = distTo(peek)
+    val prog = if (peek != null && dist > 0f) (abs(off) / dist).coerceIn(0f, 1f) else 0f
+    val w = if (settled) sp.w else androidx.compose.ui.unit.lerp(wA.value, peekW, prog)
+    val h = hA.value
+    val r = rA.value
+    val alpha = alphaA.value
+    class Swipe(val follow: Boolean, val right: Act?, val left: Act?, val dist: (Act?) -> Float)
+    val swipe by rememberUpdatedState(Swipe(follow, nextR, nextL, ::distTo))
+    LaunchedEffect(primary?.id) {
+        if (swipeTarget != null && primary?.id == swipeTarget) { wA.snapTo(sp.w); dragX.snapTo(0f); swipeTarget = null }
+    }
 
     // --- touch zone: the visual window never resizes; only an invisible touch window follows the island.
     //     Grow at once, shrink once the animation has settled.
@@ -330,10 +389,11 @@ fun IslandRoot(
                 .align(Alignment.TopCenter)
                 .graphicsLayer {
                     this.alpha = alpha
-                    val sc = vScale * press
-                    scaleX = sc
-                    scaleY = sc
+                    scaleX = press
+                    scaleY = press
                     transformOrigin = TransformOrigin(.5f, 0f)
+                    // while smaller than the pill (birth/death), stay centred on the camera hole
+                    translationY = ((h0 - h) / 2).coerceAtLeast(0.dp).toPx()
                 }
                 .size(w, h)
                 .clip(RoundedCornerShape(r))
@@ -377,12 +437,31 @@ fun IslandRoot(
                     )
                 }
                 .pointerInput(Unit) {
-                    var dx = 0f; var dy = 0f
+                    var dx = 0f; var dy = 0f; var axis = 0
+                    val vt = androidx.compose.ui.input.pointer.util.VelocityTracker()
                     detectDragGestures(
-                        onDragStart = { dx = 0f; dy = 0f },
+                        onDragStart = { dx = 0f; dy = 0f; axis = 0; vt.resetTracking() },
                         onDragEnd = {
                             val t = 44.dp.toPx()
                             val p = primaryState
+                            val sw = swipe
+                            if (axis == 1 && sw.follow) {
+                                val d = if (dx < 0) 1 else -1
+                                val n = if (d == 1) sw.right else sw.left
+                                val vx = vt.calculateVelocity().x
+                                val dd = sw.dist(n)
+                                if (n != null && (abs(dragX.value) > dd * .3f || (abs(vx) > 700.dp.toPx() && vx * dx > 0))) {
+                                    scope.launch {
+                                        dragX.animateTo(-d * dd, spring(1f, 520f), initialVelocity = vx)
+                                        swipeTarget = n.id
+                                        IslandStore.cycle(d)
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        delay(700)
+                                        if (swipeTarget == n.id) { swipeTarget = null; dragX.snapTo(0f) }
+                                    }
+                                } else scope.launch { dragX.animateTo(0f, spring(1f, 500f), initialVelocity = vx) }
+                                return@detectDragGestures
+                            }
                             when {
                                 abs(dx) > abs(dy) && abs(dx) > t -> IslandStore.cycle(if (dx < 0) 1 else -1)
                                 isBig(p) -> {}
@@ -400,6 +479,15 @@ fun IslandRoot(
                         val k = primaryState?.kind
                         if (k == Kind.LOCK || k == Kind.CHARGE || k == Kind.SYSTEM || isBig(primaryState)) return@detectDragGestures
                         ch.consume(); dx += d.x; dy += d.y; poke++
+                        if (axis == 0 && (abs(dx) > 6.dp.toPx() || abs(dy) > 6.dp.toPx())) axis = if (abs(dx) > abs(dy)) 1 else 2
+                        val sw = swipe
+                        if (axis == 1 && sw.follow) {
+                            vt.addPosition(ch.uptimeMillis, ch.position)
+                            val n = if (dx < 0) sw.right else sw.left
+                            // nothing to swipe to: a short rubber band
+                            val v = if (n != null) dx else Math.signum(dx) * min(abs(dx) * .3f, 18.dp.toPx())
+                            scope.launch { dragX.snapTo(v) }
+                        }
                     }
                 },
         ) {
@@ -407,13 +495,17 @@ fun IslandRoot(
             AnimatedContent(
                 targetState = key,
                 contentAlignment = Alignment.TopCenter,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f },
                 transitionSpec = {
+                    if (swipeTarget != null && targetState.id == swipeTarget)
+                        return@AnimatedContent androidx.compose.animation.EnterTransition.None togetherWith
+                            androidx.compose.animation.ExitTransition.None
+                    val opening = !initialState.ex && targetState.ex
                     val same = initialState.id == targetState.id
                     val lateral = !same && (initialState.kind?.prio ?: 9) < 5 && (targetState.kind?.prio ?: 9) < 5
                     val d = if (lateral) dir else 0
-                    (fadeIn(tween(200, 70)) +
-                        scaleIn(tween(320, 30, FastOutSlowInEasing), if (same) .96f else .9f, TransformOrigin(.5f, .1f)) +
+                    (fadeIn(tween(200, if (opening) 150 else 70)) +
+                        scaleIn(tween(320, if (opening) 110 else 30, FastOutSlowInEasing), if (same) .96f else .9f, TransformOrigin(.5f, .1f)) +
                         slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { it * d / 4 })
                         .togetherWith(
                             fadeOut(tween(110)) + scaleOut(tween(200), .92f, TransformOrigin(.5f, .1f)) +
@@ -446,6 +538,15 @@ fun IslandRoot(
                 ) {
                     if (a != null) Content(a, k.ex, c, h0) { poke++ }
                 }
+            }
+            if (peek != null) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .wrapContentSize(Alignment.TopCenter, unbounded = true)
+                        .requiredSize(peekW, h0)
+                        .graphicsLayer { translationX = off + if (off < 0) dist else -dist; this.alpha = .3f + .7f * prog }
+                ) { Content(peek, false, c, h0) {} }
             }
             if (s.camGuide) {
                 Box(
@@ -494,7 +595,7 @@ fun IslandRoot(
                     Modifier
                         .align(Alignment.TopCenter)
                         .offset(x = offX, y = offY)
-                        .graphicsLayer { this.alpha = alpha }
+                        .graphicsLayer { this.alpha = alpha * if (b.id == peek?.id) 1f - prog else 1f }
                 ) { IslandStore.select(b.id) }
             }
         }
@@ -617,6 +718,39 @@ private fun T(
     maxLines = maxLines, overflow = TextOverflow.Ellipsis, style = style, lineHeight = (size + 4).sp,
 )
 
+/**
+ * Text whose characters roll like an odometer when they change: up when the number grows,
+ * down when it shrinks. Characters are keyed from the right so "9 %" → "10 %" stays aligned.
+ */
+@Composable
+private fun Roll(text: String, color: Color, size: Int, weight: FontWeight = FontWeight.SemiBold, modifier: Modifier = Modifier) {
+    val last = remember { arrayOf(text) }
+    val up = remember(text) {
+        val a = last[0].filter { it.isDigit() }.toLongOrNull()
+        val b = text.filter { it.isDigit() }.toLongOrNull()
+        last[0] = text
+        a == null || b == null || b >= a
+    }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        val n = text.length
+        text.forEachIndexed { i, ch ->
+            androidx.compose.runtime.key(n - i) {
+                AnimatedContent(
+                    targetState = ch,
+                    modifier = Modifier.clipToBounds(),
+                    transitionSpec = {
+                        val e = tween<androidx.compose.ui.unit.IntOffset>(280, easing = FastOutSlowInEasing)
+                        (slideInVertically(e) { if (up) it else -it } + fadeIn(tween(200))) togetherWith
+                            (slideOutVertically(e) { if (up) -it else it } + fadeOut(tween(150))) using
+                            SizeTransform(clip = true) { _, _ -> snap() }
+                    },
+                    label = "roll",
+                ) { k -> T(k.toString(), color, size, weight, style = Num) }
+            }
+        }
+    }
+}
+
 /** Bouncy tap target. */
 @Composable
 fun Tap(size: Dp, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
@@ -702,8 +836,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             else if (a.countDown) CountdownRing(a, c, 22.dp, Modifier.padding(start = 4.dp))
             else StopwatchIcon(rememberSeconds(a), c.orange, 19.dp, Modifier.padding(start = 5.dp))
         }, {
-            T(rememberClock(a, false), if (a.variant == 1) c.green else c.orange, 15,
-                FontWeight.SemiBold, style = Num, modifier = Modifier.padding(end = 6.dp))
+            Roll(rememberClock(a, false), if (a.variant == 1) c.green else c.orange, 15, modifier = Modifier.padding(end = 6.dp))
         })
 
         Kind.RECORD -> if (ex) RecordExpanded(a, c) else CompactRow(h0, {
@@ -716,7 +849,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             }
         }, {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                T(rememberClock(a, false), c.fg, 14, FontWeight.SemiBold, style = Num)
+                Roll(rememberClock(a, false), c.fg, 14)
                 Spacer(Modifier.width(8.dp))
                 Tap(h0 - 10.dp, "Arrêter l'enregistrement", { stopRecord(a) }) {
                     Box(Modifier.fillMaxSize().clip(CircleShape).background(c.red.copy(alpha = .2f)), contentAlignment = Alignment.Center) {
@@ -729,7 +862,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         Kind.CALL -> if (ex) CallExpanded(a, c) else CompactRow(h0, {
             HandsetIcon(c.green, 17.dp, modifier = Modifier.padding(start = 6.dp))
         }, {
-            T(rememberClock(a, false), c.green, 15, FontWeight.SemiBold, style = Num, modifier = Modifier.padding(end = 7.dp))
+            Roll(rememberClock(a, false), c.green, 15, modifier = Modifier.padding(end = 7.dp))
         })
 
         Kind.NOTIF -> NotifBody(a, c, poke, counter = null, onAction = { IslandStore.remove(a.id) })
@@ -756,7 +889,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         }, {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 6.dp)) {
                 if (a.sub.isNotBlank()) { T(a.sub, c.dim, 12, style = Num); Spacer(Modifier.width(6.dp)) }
-                T("${a.level} %", c.green, 14, FontWeight.SemiBold, style = Num)
+                Roll("${a.level} %", c.green, 14)
                 Spacer(Modifier.width(6.dp))
                 BatteryGlyph(a.level, c.fg, c.green, 24.dp)
             }
@@ -769,7 +902,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         Kind.NAV -> if (ex) NavExpanded(a, c) else CompactRow(h0, {
             Box(Modifier.padding(start = 6.dp)) { NavIcon(a, c, 20.dp) }
         }, {
-            T(a.title, c.fg, 14, FontWeight.SemiBold, style = Num, modifier = Modifier.padding(end = 6.dp))
+            Roll(a.title, c.fg, 14, modifier = Modifier.padding(end = 6.dp))
         })
 
         Kind.LIVE -> if (ex) LiveExpanded(a, c) else CompactRow(h0, {
@@ -778,7 +911,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             Box(Modifier.padding(end = 6.dp)) {
                 when {
                     a.isSport -> T(a.score, c.fg, 15, FontWeight.SemiBold, style = Num)
-                    a.short.isNotBlank() -> T(a.short, c.fg, 14, FontWeight.SemiBold, style = Num)
+                    a.short.isNotBlank() -> Roll(a.short, c.fg, 14)
                     a.progress != -1f -> ProgressRing(a.progress, c.fg, c.track, 20.dp)
                     else -> T(a.title, c.fg, 13, FontWeight.Medium)
                 }
@@ -827,7 +960,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
         } else CompactRow(h0, {
             Box(Modifier.padding(start = 6.dp)) { CalendarIcon(c.fg, 18.dp) }
         }, {
-            T(a.short, c.fg, 14, FontWeight.SemiBold, style = Num, modifier = Modifier.padding(end = 7.dp))
+            Roll(a.short, c.fg, 14, modifier = Modifier.padding(end = 7.dp))
         })
 
         Kind.AUDIO -> if (ex) AudioBig(a, c) else CompactRow(h0, {
@@ -841,7 +974,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                 when {
                     a.variant == 1 -> T("Déconnecté", c.dim, 12)
                     a.level >= 0 -> {
-                        T("${a.level} %", if (a.level <= 20) c.red else c.green, 13, FontWeight.SemiBold, style = Num)
+                        Roll("${a.level} %", if (a.level <= 20) c.red else c.green, 13)
                         Spacer(Modifier.width(5.dp))
                         BatteryGlyph(a.level, c.fg, if (a.level <= 20) c.red else c.green, 22.dp)
                     }
@@ -921,7 +1054,7 @@ private fun SystemBig(a: Act, c: IslandColors) {
             else -> BatteryGlyph(a.level, c.fg, c.red, 30.dp)
         }
     }, title, sub, if (a.variant == 2 || a.variant == 5) c.red else c.fg) {
-        if (a.variant == 5) T("${a.level} %", c.red, 22, FontWeight.SemiBold, style = Num)
+        if (a.variant == 5) Roll("${a.level} %", c.red, 22)
     }
 }
 
@@ -939,7 +1072,7 @@ private fun ChargeBig(a: Act, c: IslandColors) {
                 T(a.title.ifBlank { "En charge" }, c.fg, 16, FontWeight.SemiBold)
                 T(a.sub.ifBlank { if (a.variant == 1) "Chargeur à induction" else "Câble branché" }, c.dim, 13)
             }
-            T("${a.level} %", c.green, 24, FontWeight.SemiBold, style = Num)
+            Roll("${a.level} %", c.green, 24)
         }
         Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(c.track)) {
@@ -954,7 +1087,7 @@ private fun AudioBig(a: Act, c: IslandColors) {
     StatusBig(c, if (off) c.dim else c.fg, { HeadphonesIcon(if (off) c.dim else c.fg, 26.dp) }, a.title,
         if (off) "Déconnecté" else if (a.level >= 0) "Connecté · batterie" else "Connecté") {
         if (!off && a.level >= 0) Row(verticalAlignment = Alignment.CenterVertically) {
-            T("${a.level} %", if (a.level <= 20) c.red else c.green, 20, FontWeight.SemiBold, style = Num)
+            Roll("${a.level} %", if (a.level <= 20) c.red else c.green, 20)
             Spacer(Modifier.width(6.dp))
             BatteryGlyph(a.level, c.fg, if (a.level <= 20) c.red else c.green, 26.dp)
         }
@@ -1255,7 +1388,12 @@ private fun TimerExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 T(a.title.ifBlank { if (a.countDown) "Minuteur" else a.appName }, c.dim, 12)
             }
-            T(rememberClock(a, a.chrono && !a.countDown), c.orange, 34, FontWeight.Medium, style = Num)
+            val clk = rememberClock(a, a.chrono && !a.countDown)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // the tenths run too fast to roll: only the seconds and up roll
+                Roll(clk.substringBefore(','), c.orange, 34, FontWeight.Medium)
+                if (',' in clk) T("," + clk.substringAfter(','), c.orange, 34, FontWeight.Medium, style = Num)
+            }
         }
         if (second != null) {
             Tap(52.dp, second.label, { poke(); second.fire() }) {
@@ -1288,7 +1426,7 @@ private fun RecordExpanded(a: Act, c: IslandColors) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             T(if (a.variant == 1) "Enregistrement vocal" else "Enregistrement d'écran", c.fg, 15, FontWeight.SemiBold)
-            T(rememberClock(a, false), c.dim, 13, style = Num)
+            Roll(rememberClock(a, false), c.dim, 13, FontWeight.Normal)
         }
         Pill("Arrêter", c.red, Color.White) { stopRecord(a) }
     }
@@ -1302,7 +1440,7 @@ private fun CallExpanded(a: Act, c: IslandColors) {
         AppAvatar(a, 52.dp, c)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            T(if (a.incoming) "Appel entrant" else rememberClock(a, false), if (a.incoming) c.dim else c.green, 12, style = Num)
+            if (a.incoming) T("Appel entrant", c.dim, 12) else Roll(rememberClock(a, false), c.green, 12, FontWeight.Normal)
             T(a.title, c.fg, 16, FontWeight.SemiBold)
         }
         Tap(52.dp, if (a.incoming) "Refuser" else "Raccrocher", { (decline ?: a.actions.lastOrNull())?.fire() }) {
