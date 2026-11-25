@@ -43,13 +43,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.v.outputs.name }}
         run: |
-          for i in 1 2 3 4 5; do
+          for i in $(seq 1 12); do
             if gh release view "$TAG" >/dev/null 2>&1; then
               gh release upload "$TAG" Island-*.apk --clobber && gh release edit "$TAG" --draft=false --latest && exit 0
             else
               gh release create "$TAG" Island-*.apk --target "$GITHUB_SHA" --title "Island $TAG" \
                 --notes "APK signé, s'installe par-dessus la version précédente." --latest && exit 0
             fi
-            echo "Attempt $i failed, retrying in 20 s…"; sleep 20
+            echo "Attempt $i failed, retrying in 50 s…"; sleep 50
           done
           exit 1
