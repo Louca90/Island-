@@ -284,38 +284,65 @@ private fun Controls(a: Act) {
     }
 }
 
+/**
+ * Volume: if the player is remote (Spotify Connect on a PC, a speaker, Cast…) we drive the
+ * remote volume through the media session, exactly like One UI's volume keys. Otherwise phone media volume.
+ */
 @Composable
 private fun VolumeBar() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val am = remember { ctx.getSystemService(AudioManager::class.java) }
-    val max = remember { am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1) }
-    var vol by remember { mutableIntStateOf(am.getStreamVolume(AudioManager.STREAM_MUSIC)) }
+    fun remote() = IslandStore.media?.playbackInfo?.takeIf {
+        it.playbackType == android.media.session.MediaController.PlaybackInfo.PLAYBACK_TYPE_REMOTE &&
+            it.volumeControl != android.media.VolumeProvider.VOLUME_CONTROL_FIXED
+    }
+    fun readMax() = remote()?.maxVolume?.coerceAtLeast(1) ?: am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    fun readVol() = remote()?.currentVolume ?: am.getStreamVolume(AudioManager.STREAM_MUSIC)
+
+    var isRemote by remember { mutableStateOf(remote() != null) }
+    var max by remember { mutableIntStateOf(readMax()) }
+    var vol by remember { mutableIntStateOf(readVol()) }
     var dragging by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { while (true) { if (!dragging) vol = am.getStreamVolume(AudioManager.STREAM_MUSIC); delay(400) } }
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (!dragging) { isRemote = remote() != null; max = readMax(); vol = readVol() }
+            delay(400)
+        }
+    }
     val f by animateFloatAsState(vol.toFloat() / max, tween(150), label = "vol")
     fun set(x: Float, w: Float) {
         val v = ((x / w).coerceIn(0f, 1f) * max).toInt()
-        if (v != vol) { vol = v; am.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0) }
+        if (v == vol) return
+        vol = v
+        val c = IslandStore.media
+        if (remote() != null && c != null) c.setVolumeTo(v, 0)
+        else am.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SpeakerIcon(Color.White.copy(alpha = .55f), 18.dp, waves = 0)
-        Spacer(Modifier.width(12.dp))
-        BoxWithConstraints(
-            Modifier.weight(1f).height(26.dp)
-                .pointerInput(max) { detectTapGestures { o -> set(o.x, size.width.toFloat()) } }
-                .pointerInput(max) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { dragging = true }, onDragEnd = { dragging = false }, onDragCancel = { dragging = false },
-                    ) { ch, _ -> ch.consume(); set(ch.position.x, size.width.toFloat()) }
-                },
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = .18f))) {
-                Box(Modifier.fillMaxWidth(f).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = .85f)))
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SpeakerIcon(Color.White.copy(alpha = .55f), 18.dp, waves = 0)
+            Spacer(Modifier.width(12.dp))
+            BoxWithConstraints(
+                Modifier.weight(1f).height(26.dp)
+                    .pointerInput(Unit) { detectTapGestures { o -> set(o.x, size.width.toFloat()) } }
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { dragging = true }, onDragEnd = { dragging = false }, onDragCancel = { dragging = false },
+                        ) { ch, _ -> ch.consume(); set(ch.position.x, size.width.toFloat()) }
+                    },
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = .18f))) {
+                    Box(Modifier.fillMaxWidth(f).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = .85f)))
+                }
             }
+            Spacer(Modifier.width(12.dp))
+            SpeakerIcon(Color.White.copy(alpha = .55f), 18.dp, waves = 2)
         }
-        Spacer(Modifier.width(12.dp))
-        SpeakerIcon(Color.White.copy(alpha = .55f), 18.dp, waves = 2)
+        if (isRemote) {
+            Text("Volume de l'appareil connecté", color = Color.White.copy(alpha = .4f), fontSize = 12.sp,
+                modifier = Modifier.padding(start = 30.dp))
+        }
     }
 }
 
