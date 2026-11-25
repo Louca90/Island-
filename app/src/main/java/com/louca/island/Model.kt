@@ -313,6 +313,8 @@ object IslandStore {
     /** True when the StandBy screen was opened automatically (so unlocking closes it). */
     var standbyAuto = false
     var closeStandby: (() -> Unit)? = null
+    /** Turns the accessibility service off from inside (disableSelf): the island disappears for good. */
+    var stopIsland: (() -> Unit)? = null
 
     fun openStandby(auto: Boolean = false) {
         standbyAuto = auto

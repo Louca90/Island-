@@ -223,6 +223,7 @@ class IslandAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        IslandStore.stopIsland = { runCatching { disableSelf() } }
         km = getSystemService(KeyguardManager::class.java)
         wm = getSystemService(WindowManager::class.java)
         landscape.value = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE

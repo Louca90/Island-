@@ -378,6 +378,7 @@ private fun Home() {
         PageDef("update", "Mises à jour & sauvegarde", "GitHub, exporter, importer", "mise a jour update github version sauvegarde export import reglages", Color(0xFF32ADE6)),
         PageDef("help", "Aide", "QuickStar, guide Termux", "aide tuto quickstar good lock termux guide icones barre", Color(0xFFFFD60A)),
         PageDef("diag", "Diagnostic", "Ce que les apps envoient (minuteur…)", "diagnostic debug bug minuteur timer chrono notification envoie", Color(0xFFAC8E68)),
+        PageDef("restore", "Tout remettre comme avant", "Retirer l'île, réactiver la barre Samsung", "remettre avant restaurer retirer supprimer desinstaller arreter desactiver reinitialiser reset barre samsung pop-up icones now bar", Color(0xFF636366)),
     )
     var query by remember { androidx.compose.runtime.mutableStateOf("") }
     androidx.activity.compose.BackHandler(enabled = screen != "home") { screen = "home" }
@@ -631,6 +632,69 @@ private fun Home() {
                         Hint("Pas à pas pour donner à Island l'autorisation de couper les pop-ups, depuis ton téléphone.")
                         Spacer(Modifier.height(8.dp))
                         FilledTonalButton(onClick = { guide = true }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir le guide") }
+                    }
+                }
+                }
+                "restore" -> {
+                item {
+                    val secOk = remember(tick) { ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED }
+                    var armed by remember { androidx.compose.runtime.mutableStateOf(false) }
+                    var done by remember { androidx.compose.runtime.mutableStateOf(false) }
+                    LaunchedEffect(armed) { if (armed) { kotlinx.coroutines.delay(4000); armed = false } }
+                    Card("Tout remettre d'un coup") {
+                        Hint(
+                            "Arrête l'île, réactive les pop-ups Samsung" + (if (secOk) "" else " (si l'autorisation Termux a été donnée)") +
+                                ", remet les réglages d'Island par défaut et coupe son accès aux notifications. " +
+                                "Ce qu'Island ne peut pas toucher (QuickStar, icônes, Now Bar) est listé juste en dessous."
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        FilledTonalButton(
+                            onClick = {
+                                if (!armed) { armed = true; return@FilledTonalButton }
+                                armed = false
+                                if (secOk) runCatching { SysSettings.Global.putInt(ctx.contentResolver, "heads_up_notifications_enabled", 1) }
+                                Prefs.update { Settings(guideSeen = it.guideSeen) }
+                                IslandStore.clear()
+                                IslandStore.stopIsland?.invoke()
+                                runCatching { com.louca.island.IslandNotificationService.instance?.requestUnbind() }
+                                done = true; tick++
+                            },
+                            shape = RoundedCornerShape(20.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                                containerColor = if (armed) Color(0xFFFF453A) else MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = if (armed) Color.White else MaterialTheme.colorScheme.onSecondaryContainer,
+                            ),
+                        ) { Text(if (armed) "Appuie encore pour confirmer" else "Remettre comme avant") }
+                        if (done) {
+                            Spacer(Modifier.height(6.dp))
+                            Hint("C'est fait côté Island. Termine avec les étapes ci-dessous (celles pas encore cochées).")
+                        }
+                    }
+                }
+                item {
+                    val notifSettings = {
+                        runCatching { ctx.startActivity(Intent("android.settings.NOTIFICATION_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            .onFailure { ctx.startActivity(Intent(SysSettings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        Unit
+                    }
+                    val popOn = remember(tick) { SysSettings.Global.getInt(ctx.contentResolver, "heads_up_notifications_enabled", 1) == 1 }
+                    Card("À remettre à la main") {
+                        Step("Île arrêtée", "Accessibilité › Applications installées › Island › Désactiver.", !a11y, "Ouvrir") {
+                            ctx.startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                        Step("Accès aux notifications retiré", "Island ne lit plus tes notifications.", !listener, "Ouvrir") {
+                            ctx.startActivity(Intent(SysSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        }
+                        Step("Pop-ups Samsung réactivés", "Si tu n'avais pas donné l'autorisation Termux, rien à faire ici.", popOn, "Notifications", notifSettings)
+                        Step("Style des pop-ups", "Notifications › Style des notifications pop-up : remets « Bref » si c'est ce que tu avais.", false, "Ouvrir", notifSettings)
+                        Step("Icônes de la barre d'état", "Good Lock › QuickStar : recoche les icônes cachées (Wi-Fi, réseau, alarme…) et réactive la Now Bar dans la barre d'état.", false, "Good Lock") {
+                            ctx.packageManager.getLaunchIntentForPackage("com.samsung.android.goodlock")?.let { ctx.startActivity(it) }
+                        }
+                        Step("Icônes de notification", "Notifications › Paramètres avancés › Afficher les icônes de notification : remets « 3 dernières » ou « Toutes ».", false, "Ouvrir", notifSettings)
+                        Step("Notifications en direct", "Notifications › Notifications en direct : réactive Horloge et Enregistreur si tu les avais coupées.", false, "Ouvrir", notifSettings)
+                        Step("Désinstaller Island", "Optionnel : supprime l'app (tes réglages exportés restent dans tes fichiers).", false, "Désinstaller") {
+                            ctx.startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${ctx.packageName}")))
+                        }
                     }
                 }
                 }
@@ -1230,7 +1294,7 @@ private fun CategoryRow(p: PageDef, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(p.color), contentAlignment = Alignment.Center) {
-            Text(p.title.take(1), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            CategoryGlyph(p.key, Color.White, 22.dp)
         }
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
@@ -1238,6 +1302,84 @@ private fun CategoryRow(p: PageDef, onClick: () -> Unit) {
             Text(p.subtitle, fontSize = 13.sp, color = cs.onSurfaceVariant)
         }
         Text("›", fontSize = 22.sp, color = cs.onSurfaceVariant)
+    }
+}
+
+/** One explicit pictogram per settings category. */
+@Composable
+private fun CategoryGlyph(key: String, col: Color, size: androidx.compose.ui.unit.Dp) {
+    when (key) {
+        "notif" -> com.louca.island.ui.BellIcon(col, size)
+        "live" -> com.louca.island.ui.StopwatchIcon(0f, col, size)
+        "standby" -> com.louca.island.ui.BoltIcon(col, size)
+        else -> androidx.compose.foundation.Canvas(Modifier.size(size)) {
+            val w = this.size.width
+            val st = androidx.compose.ui.graphics.drawscope.Stroke(w * .09f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+            fun o(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(w * x, w * y)
+            fun line(a: androidx.compose.ui.geometry.Offset, b: androidx.compose.ui.geometry.Offset) = drawLine(col, a, b, w * .09f, androidx.compose.ui.graphics.StrokeCap.Round)
+            fun path(b: androidx.compose.ui.graphics.Path.() -> Unit) = androidx.compose.ui.graphics.Path().apply(b)
+            when (key) {
+                "perm" -> { // shield with a check
+                    drawPath(path {
+                        moveTo(w * .5f, w * .08f); lineTo(w * .84f, w * .2f); lineTo(w * .84f, w * .46f)
+                        cubicTo(w * .84f, w * .7f, w * .68f, w * .84f, w * .5f, w * .93f)
+                        cubicTo(w * .32f, w * .84f, w * .16f, w * .7f, w * .16f, w * .46f)
+                        lineTo(w * .16f, w * .2f); close()
+                    }, col, style = st)
+                    drawPath(path { moveTo(w * .34f, w * .5f); lineTo(w * .46f, w * .62f); lineTo(w * .67f, w * .38f) }, col, style = st)
+                }
+                "demo" -> { // play in a circle
+                    drawCircle(col, w * .42f, style = st)
+                    drawPath(path { moveTo(w * .42f, w * .32f); lineTo(w * .7f, w * .5f); lineTo(w * .42f, w * .68f); close() }, col)
+                }
+                "look" -> { // palette
+                    drawPath(path {
+                        moveTo(w * .5f, w * .08f)
+                        cubicTo(w * .1f, w * .08f, w * .02f, w * .55f, w * .2f, w * .78f)
+                        cubicTo(w * .36f, w * .98f, w * .56f, w * .9f, w * .52f, w * .74f)
+                        cubicTo(w * .48f, w * .6f, w * .6f, w * .55f, w * .74f, w * .6f)
+                        cubicTo(w * .95f, w * .66f, w * .98f, w * .36f, w * .86f, w * .24f)
+                        cubicTo(w * .78f, w * .14f, w * .64f, w * .08f, w * .5f, w * .08f); close()
+                    }, col, style = st)
+                    drawCircle(col, w * .07f, o(.32f, .34f)); drawCircle(col, w * .07f, o(.55f, .26f)); drawCircle(col, w * .07f, o(.27f, .58f))
+                }
+                "zones" -> { // camera hole inside a dashed zone
+                    drawRoundRect(col, o(.06f, .3f), androidx.compose.ui.geometry.Size(w * .88f, w * .4f), androidx.compose.ui.geometry.CornerRadius(w * .2f),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(w * .08f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(w * .1f, w * .08f))))
+                    drawCircle(col, w * .1f, o(.5f, .5f))
+                }
+                "behav" -> { // sliders
+                    listOf(.25f to .35f, .5f to .65f, .75f to .45f).forEach { (y, x) ->
+                        line(o(.12f, y), o(.88f, y)); drawCircle(col, w * .09f, o(x, y))
+                    }
+                }
+                "update" -> { // download into a tray
+                    line(o(.5f, .1f), o(.5f, .62f))
+                    drawPath(path { moveTo(w * .3f, w * .44f); lineTo(w * .5f, w * .64f); lineTo(w * .7f, w * .44f) }, col, style = st)
+                    drawPath(path { moveTo(w * .14f, w * .66f); lineTo(w * .14f, w * .88f); lineTo(w * .86f, w * .88f); lineTo(w * .86f, w * .66f) }, col, style = st)
+                }
+                "help" -> { // question mark in a circle
+                    drawCircle(col, w * .42f, style = st)
+                    drawPath(path {
+                        moveTo(w * .37f, w * .38f)
+                        cubicTo(w * .37f, w * .22f, w * .63f, w * .22f, w * .63f, w * .38f)
+                        cubicTo(w * .63f, w * .5f, w * .5f, w * .5f, w * .5f, w * .6f)
+                    }, col, style = st)
+                    drawCircle(col, w * .055f, o(.5f, .74f))
+                }
+                "diag" -> { // magnifier over a pulse
+                    drawCircle(col, w * .28f, o(.42f, .42f), style = st)
+                    line(o(.62f, .62f), o(.88f, .88f))
+                    drawPath(path { moveTo(w * .24f, w * .44f); lineTo(w * .34f, w * .44f); lineTo(w * .4f, w * .3f); lineTo(w * .47f, w * .56f); lineTo(w * .52f, w * .42f); lineTo(w * .6f, w * .42f) }, col,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(w * .06f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                }
+                "restore" -> { // undo arrow
+                    drawArc(col, 180f, 250f, false, o(.18f, .22f), androidx.compose.ui.geometry.Size(w * .64f, w * .64f), style = st)
+                    drawPath(path { moveTo(w * .06f, w * .4f); lineTo(w * .18f, w * .56f); lineTo(w * .32f, w * .42f) }, col, style = st)
+                }
+                else -> drawRoundRect(col, o(.12f, .36f), androidx.compose.ui.geometry.Size(w * .76f, w * .28f), androidx.compose.ui.geometry.CornerRadius(w * .14f))
+            }
+        }
     }
 }
 
