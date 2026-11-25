@@ -9,6 +9,6 @@ Télécharge le dernier APK dans **Releases**, ou utilise « Vérifier » dans l
 
 ## Publier une version
 1. Monte `versionCode` / `versionName` dans `app/build.gradle.kts`.
-2. Pousse un tag `vX.Y` : GitHub Actions compile et publie l'APK dans une release.
+2. Pousse sur `main` : GitHub Actions compile et publie l'APK dans la release `vX.Y`.
 
 `app/island.keystore` est une clé de debug (mot de passe `android`) utilisée pour que chaque version s'installe par-dessus la précédente. À remplacer par une vraie clé si l'app est un jour distribuée.
