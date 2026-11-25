@@ -510,8 +510,10 @@ fun IslandRoot(
                 modifier = Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f },
                 transitionSpec = {
                     if (swipeTarget != null && targetState.id == swipeTarget)
-                        return@AnimatedContent androidx.compose.animation.EnterTransition.None togetherWith
-                            androidx.compose.animation.ExitTransition.None
+                        // the new content is already on screen (it slid in under the finger): swap instantly,
+                        // without keeping the old one alive behind it during a size animation
+                        return@AnimatedContent (fadeIn(snap()) togetherWith fadeOut(snap()))
+                            .using(SizeTransform(clip = false) { _, _ -> snap() })
                     val opening = !initialState.ex && targetState.ex
                     val same = initialState.id == targetState.id
                     val lateral = !same && (initialState.kind?.prio ?: 9) < 5 && (targetState.kind?.prio ?: 9) < 5
@@ -568,7 +570,9 @@ fun IslandRoot(
                         .blur(blur, BlurredEdgeTreatment.Unbounded)
                         .padding(top = extra)
                 ) {
-                    if (a != null) androidx.compose.runtime.CompositionLocalProvider(LocalIconPhase provides iconPhase) {
+                    if (a != null) androidx.compose.runtime.CompositionLocalProvider(
+                        LocalIconPhase provides iconPhase, LocalIconStatic provides !iconFx,
+                    ) {
                         Content(a, k.ex, c, h0) { poke++ }
                     }
                 }

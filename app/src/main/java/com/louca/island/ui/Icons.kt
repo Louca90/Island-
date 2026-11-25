@@ -51,6 +51,36 @@ private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 val LocalIconPhase = androidx.compose.runtime.compositionLocalOf<androidx.compose.runtime.State<Float>> { StaticPhase }
 private val StaticPhase = androidx.compose.runtime.mutableFloatStateOf(1f)
 
+/** True when the island just swapped content under the finger: icons show their final state at once. */
+val LocalIconStatic = androidx.compose.runtime.compositionLocalOf { false }
+
+/**
+ * A clock on absolute time. Looping animations derived from it look the same in every copy of an
+ * icon, so a swipe that recreates the content doesn't restart them (no jump back).
+ */
+@Composable
+private fun frameClock(): androidx.compose.runtime.State<Long> {
+    val s = remember { androidx.compose.runtime.mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
+    LaunchedEffect(Unit) { while (true) androidx.compose.runtime.withFrameMillis { s.longValue = android.os.SystemClock.uptimeMillis() } }
+    return s
+}
+
+private fun androidx.compose.runtime.State<Long>.wave(
+    period: Int, from: Float, to: Float, reverse: Boolean, easing: androidx.compose.animation.core.Easing, offset: Int = 0,
+): androidx.compose.runtime.State<Float> {
+    val clock = this
+    return object : androidx.compose.runtime.State<Float> {
+        override val value: Float get() {
+            val t = clock.value + offset
+            val f = if (reverse) {
+                val x = (t % (period * 2L)).toFloat() / period
+                if (x <= 1f) x else 2f - x
+            } else (t % period).toFloat() / period
+            return from + (to - from) * easing.transform(f)
+        }
+    }
+}
+
 private fun ease(t: Float) = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
 /** Maps [t] from the window [a, b] to 0..1, to sequence parts of an icon. */
 private fun seg(t: Float, a: Float, b: Float) = ((t - a) / (b - a)).coerceIn(0f, 1f)
@@ -179,15 +209,10 @@ fun LockIcon(unlocked: Boolean, color: Color, size: Dp, modifier: Modifier = Mod
 @Composable
 fun Equalizer(playing: Boolean, color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "eq")
+    val inf = frameClock()
     val durs = intArrayOf(430, 560, 380, 510)
     val bars = durs.mapIndexed { i, d ->
-        inf.animateFloat(
-            0.28f, 1f,
-            infiniteRepeatable(tween(d, delayMillis = 0, easing = FastOutSlowInEasing), RepeatMode.Reverse,
-                initialStartOffset = androidx.compose.animation.core.StartOffset(i * 120)),
-            label = "b$i"
-        )
+        inf.wave(d, .28f, 1f, true, FastOutSlowInEasing, i * 120)
     }
     val amt by animateFloatAsState(if (playing) 1f else 0f, tween(350, easing = FastOutSlowInEasing), label = "amt")
     Canvas(modifier.size(size).appear(ph)) {
@@ -228,9 +253,9 @@ fun StopwatchIcon(seconds: Float, color: Color, size: Dp, modifier: Modifier = M
 @Composable
 fun RecDot(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "rec")
-    val a by inf.animateFloat(1f, 0.35f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "a")
-    val r by inf.animateFloat(1f, 1.9f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "r")
+    val inf = frameClock()
+    val a by inf.wave(900, 1f, 0.35f, true, FastOutSlowInEasing)
+    val r by inf.wave(1300, 1f, 1.9f, false, LinearEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         drawCircle(color.copy(alpha = (1.9f - r) / 0.9f * 0.35f), w * .22f * r)
@@ -244,7 +269,8 @@ private val boltPts = listOf(.58f to .05f, .22f to .56f, .47f to .56f, .40f to .
 @Composable
 fun BoltIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val t = remember { Animatable(0f) }
+    val still = LocalIconStatic.current
+    val t = remember { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(700, easing = FastOutSlowInEasing)) }
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
@@ -287,11 +313,9 @@ private val handsetPath by lazy {
 @Composable
 fun HandsetIcon(color: Color, size: Dp, hangUp: Boolean = false, ring: Boolean = false, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "ring")
-    val wig by inf.animateFloat(
-        -1f, 1f, infiniteRepeatable(tween(90, easing = LinearEasing), RepeatMode.Reverse), label = "w"
-    )
-    val burst by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "bu")
+    val inf = frameClock()
+    val wig by inf.wave(90, -1f, 1f, true, LinearEasing)
+    val burst by inf.wave(1400, 0f, 1f, false, LinearEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val angle = (if (hangUp) 135f else 0f) + (if (ring && burst < 0.35f) wig * 12f else 0f) - (1f - ease(ph.value)) * 50f
@@ -321,8 +345,15 @@ fun BubbleIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun BellIcon(color: Color, size: Dp, slash: Boolean = false, ring: Boolean = false, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val t = remember { Animatable(0f) }
-    LaunchedEffect(slash, ring) { t.snapTo(0f); t.animateTo(1f, tween(650, easing = FastOutSlowInEasing)) }
+    val still = LocalIconStatic.current
+    val t = remember { Animatable(if (still) 1f else 0f) }
+    val first = remember { booleanArrayOf(true) }
+    LaunchedEffect(slash, ring) {
+        val skip = first[0] && still
+        first[0] = false
+        if (skip) return@LaunchedEffect
+        t.snapTo(0f); t.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+    }
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val q = seg(ph.value, .15f, 1f)
@@ -354,8 +385,8 @@ fun BellIcon(color: Color, size: Dp, slash: Boolean = false, ring: Boolean = fal
 @Composable
 fun VibrateIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "vib")
-    val x by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(70, easing = LinearEasing), RepeatMode.Reverse), label = "x")
+    val inf = frameClock()
+    val x by inf.wave(70, -1f, 1f, true, LinearEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         translate(x * w * .03f, 0f) {
@@ -374,7 +405,8 @@ fun VibrateIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun MoonIcon(color: Color, cut: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val t = remember { Animatable(0f) }
+    val still = LocalIconStatic.current
+    val t = remember { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(500, easing = FastOutSlowInEasing)) }
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
@@ -429,8 +461,8 @@ fun NavArrow(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun ProgressRing(progress: Float, color: Color, track: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "ring")
-    val spin by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "s")
+    val inf = frameClock()
+    val spin by inf.wave(1100, 0f, 360f, false, LinearEasing)
     val p by animateFloatAsState(progress.coerceIn(0f, 1f), tween(400, easing = FastOutSlowInEasing), label = "p")
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
@@ -522,7 +554,8 @@ fun SendArrow(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun CheckIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val t = remember { Animatable(0f) }
+    val still = LocalIconStatic.current
+    val t = remember { Animatable(if (still) 1f else 0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
@@ -616,9 +649,9 @@ fun KeyIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun AlarmClockIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "al")
-    val wig by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(80, easing = LinearEasing), RepeatMode.Reverse), label = "w")
-    val burst by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "b")
+    val inf = frameClock()
+    val wig by inf.wave(80, -1f, 1f, true, LinearEasing)
+    val burst by inf.wave(1200, 0f, 1f, false, LinearEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         rotate(if (burst < .4f) wig * 10f else 0f) {
@@ -661,8 +694,8 @@ fun LyricsIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun ScreenRecIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "sr")
-    val p by inf.animateFloat(1f, .72f, infiniteRepeatable(tween(850, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
+    val inf = frameClock()
+    val p by inf.wave(850, 1f, .72f, true, FastOutSlowInEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         drawArc(color, -90f, 360f * ease(seg(ph.value, 0f, .75f)), false, Offset(w * .08f, w * .08f), Size(w * .84f, w * .84f), style = Stroke(w * .1f))
@@ -674,8 +707,8 @@ fun ScreenRecIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun FlashIcon(color: Color, size: Dp, on: Boolean = false, modifier: Modifier = Modifier) {
     val ph = LocalIconPhase.current
-    val inf = rememberInfiniteTransition(label = "fl")
-    val g by inf.animateFloat(.55f, 1f, infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g")
+    val inf = frameClock()
+    val g by inf.wave(1100, .55f, 1f, true, FastOutSlowInEasing)
     Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val head = Path().apply {
