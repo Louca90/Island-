@@ -30,6 +30,17 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".StandbyActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:screenOrientation="sensorLandscape"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:theme="@style/Theme.Island.Standby" />
+        <activity
             android:name=".ReplyActivity"
             android:exported="false"
             android:excludeFromRecents="true"

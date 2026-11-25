@@ -57,6 +57,7 @@ data class Settings(
     /** Same, used while the lock screen is showing (operator name, etc.). */
     val deadZonesLock: List<Pair<Float, Float>> = emptyList(),
     val showZones: Boolean = false,
+    val standbyOnCharge: Boolean = true,
 )
 
 private fun parseZones(v: String?): List<Pair<Float, Float>> = (v ?: "").split(';').mapNotNull {
@@ -105,6 +106,7 @@ object Prefs {
             deadZones = parseZones(sp.getString("dz", "")),
             deadZonesLock = parseZones(sp.getString("dzLock", "")),
             showZones = sp.getBoolean("dzShow", false),
+            standbyOnCharge = sp.getBoolean("standby", true),
         )
     }
 
@@ -155,7 +157,7 @@ object Prefs {
             .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
             .putBoolean("lyrics", n.showLyrics).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
-            .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones)
+            .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones).putBoolean("standby", n.standbyOnCharge)
             .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })
             .apply()
     }
@@ -284,6 +286,17 @@ object IslandStore {
     val wallTick = MutableStateFlow(0)
     /** True while the lock screen is showing (picks the lock-screen dead zones). */
     val locked = MutableStateFlow(false)
+    /** True while the charging StandBy screen is showing (the island hides). */
+    val standby = MutableStateFlow(false)
+
+    fun openStandby() {
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(appContext, StandbyActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            )
+        }
+    }
 
     val lyrics = MutableStateFlow<Lyrics?>(null)
     val lyricsOpen = MutableStateFlow(false)

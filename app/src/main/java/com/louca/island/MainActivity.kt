@@ -466,6 +466,16 @@ private fun Home() {
             }
         }
 
+        item {
+            Card("Mode veille en charge") {
+                Toggle("Ouvrir en charge", "Quand tu branches le téléphone : écran musique en paysage, toujours allumé, même verrouillé. Pochette et contrôles à gauche, paroles à droite, grande horloge s'il n'y a pas de musique. Se ferme quand tu débranches ou d'un double tap.", s.standbyOnCharge) { v ->
+                    Prefs.update { it.copy(standbyOnCharge = v) }
+                }
+                Spacer(Modifier.height(6.dp))
+                FilledTonalButton(onClick = { IslandStore.openStandby() }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir maintenant") }
+            }
+        }
+
         item { DeadZonesCard(s) }
 
         item {

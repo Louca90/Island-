@@ -177,7 +177,10 @@ class IslandAccessibilityService : AccessibilityService() {
                     val lvl = getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
                     IslandStore.upsert(Act(id = "sys", kind = Kind.SYSTEM, title = "Batterie faible · $lvl %", variant = 5, level = lvl), ttl = 3500)
                 }
-                Intent.ACTION_POWER_CONNECTED -> showCharge(first = true)
+                Intent.ACTION_POWER_CONNECTED -> {
+                    showCharge(first = true)
+                    if (s.standbyOnCharge) scope.launch { kotlinx.coroutines.delay(1200); IslandStore.openStandby() }
+                }
                 android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED,
                 android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED,
                 BT_BATTERY -> onBluetooth(i, s)
@@ -249,7 +252,8 @@ class IslandAccessibilityService : AccessibilityService() {
         val replying by IslandStore.replying.collectAsState()
         val locked by IslandStore.locked.collectAsState()
         val zones = if (locked) s.deadZonesLock else s.deadZones
-        val hidden = land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null
+        val standby by IslandStore.standby.collectAsState()
+        val hidden = land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null || standby
         val colors = rememberIslandColors(s)
         IslandRoot(
             acts = acts, pick = pick, expandedFlag = expanded, s = s, c = colors, hidden = hidden,
