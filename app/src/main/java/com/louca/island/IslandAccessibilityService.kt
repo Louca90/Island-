@@ -164,21 +164,21 @@ class IslandAccessibilityService : AccessibilityService() {
                         android.media.AudioManager.RINGER_MODE_VIBRATE -> 1 to "Vibreur"
                         else -> 0 to "Sonnerie"
                     }
-                    IslandStore.upsert(Act(id = "sys", kind = Kind.SYSTEM, title = t, variant = v, stamp = System.currentTimeMillis()), ttl = 2200)
+                    IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = t, variant = v, stamp = System.currentTimeMillis()))
                 }
                 android.app.NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED -> {
                     if (!s.showSystem) return
                     val f = getSystemService(android.app.NotificationManager::class.java).currentInterruptionFilter
                     val on = f != android.app.NotificationManager.INTERRUPTION_FILTER_ALL
-                    IslandStore.upsert(
+                    IslandStore.showStatus(
                         Act(id = "sys", kind = Kind.SYSTEM, title = if (on) "Ne pas déranger" else "Notifications activées",
-                            variant = if (on) 3 else 4, stamp = System.currentTimeMillis()), ttl = 2200
+                            variant = if (on) 3 else 4, stamp = System.currentTimeMillis())
                     )
                 }
                 Intent.ACTION_BATTERY_LOW -> {
                     if (!s.showSystem) return
                     val lvl = getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                    IslandStore.upsert(Act(id = "sys", kind = Kind.SYSTEM, title = "Batterie faible · $lvl %", variant = 5, level = lvl), ttl = 3500)
+                    IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = "Batterie faible · $lvl %", variant = 5, level = lvl))
                 }
                 Intent.ACTION_POWER_CONNECTED -> {
                     showCharge(first = true)
@@ -210,7 +210,6 @@ class IslandAccessibilityService : AccessibilityService() {
             onOutside = {
                 IslandStore.replying.value = null
                 IslandStore.expanded.value = false
-                IslandStore.acts.value.find { it.kind == Kind.NOTIF }?.let { IslandStore.remove(it.id) }
             }
         }
         vlp.height = (500 * resources.displayMetrics.density).toInt()
@@ -240,6 +239,7 @@ class IslandAccessibilityService : AccessibilityService() {
             while (true) { runCatching { checkCalendar() }; kotlinx.coroutines.delay(30_000) }
         }
         setupTorch()
+        setupScreenshots()
 
         // After the full-screen landscape player closes, re-read orientation and system-bar state:
         // otherwise the island can stay hidden, thinking it is still full screen / landscape.
@@ -306,6 +306,48 @@ class IslandAccessibilityService : AccessibilityService() {
         IslandStore.openStandby(auto = true)
     }
 
+    // ---- screenshots: watch MediaStore for a new image in a Screenshots folder
+    private var lastShotId = -1L
+
+    private fun setupScreenshots() {
+        val obs = object : android.database.ContentObserver(android.os.Handler(mainLooper)) {
+            override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                scope.launch { kotlinx.coroutines.delay(350); runCatching { checkScreenshot() } }
+            }
+        }
+        runCatching {
+            contentResolver.registerContentObserver(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, obs)
+        }
+    }
+
+    private fun checkScreenshot() {
+        if (!Prefs.state.value.showShots) return
+        if (checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val M = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val proj = arrayOf(
+            android.provider.MediaStore.Images.Media._ID, android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+            android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.provider.MediaStore.Images.Media.DATE_ADDED,
+            android.provider.MediaStore.Images.Media.IS_PENDING,
+        )
+        contentResolver.query(M, proj, null, null, android.provider.MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { c ->
+            if (!c.moveToFirst()) return
+            val id = c.getLong(0)
+            val name = c.getString(1) ?: ""; val path = c.getString(2) ?: ""
+            val added = c.getLong(3) * 1000; val pending = c.getInt(4) == 1
+            if (pending || id == lastShotId) return
+            if (System.currentTimeMillis() - added > 15_000) return
+            if (!path.contains("screenshot", true) && !name.startsWith("screenshot", true)) return
+            lastShotId = id
+            val uri = android.content.ContentUris.withAppendedId(M, id)
+            val thumb = runCatching { contentResolver.loadThumbnail(uri, android.util.Size(360, 780), null) }.getOrNull()
+            IslandStore.showStatus(
+                Act(id = "shot", kind = Kind.SHOT, title = "Capture d'écran", art = thumb, uri = uri.toString(),
+                    stamp = System.currentTimeMillis()),
+                bigMs = 6_000, smallMs = 5_000,
+            )
+        }
+    }
+
     private var camId: String? = null
     private var torchMax = 1
 
@@ -360,14 +402,14 @@ class IslandAccessibilityService : AccessibilityService() {
         when (i.action) {
             android.bluetooth.BluetoothDevice.ACTION_ACL_CONNECTED -> {
                 budsAt = now; budsAddr = dev.address
-                IslandStore.upsert(Act(id = "buds", kind = Kind.AUDIO, title = name, level = -1, stamp = now), ttl = 4500)
+                IslandStore.showStatus(Act(id = "buds", kind = Kind.AUDIO, title = name, level = -1, stamp = now))
             }
             android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED ->
-                IslandStore.upsert(Act(id = "buds", kind = Kind.AUDIO, title = name, variant = 1, level = -1, stamp = now), ttl = 2200)
+                IslandStore.showStatus(Act(id = "buds", kind = Kind.AUDIO, title = name, variant = 1, level = -1, stamp = now))
             BT_BATTERY -> {
                 val lvl = i.getIntExtra("android.bluetooth.device.extra.BATTERY_LEVEL", -1)
                 if (lvl < 0 || dev.address != budsAddr || now - budsAt > 15_000) return
-                IslandStore.upsert(Act(id = "buds", kind = Kind.AUDIO, title = name, level = lvl, stamp = budsAt), ttl = 4000)
+                IslandStore.showStatus(Act(id = "buds", kind = Kind.AUDIO, title = name, level = lvl, stamp = budsAt))
             }
         }
     }
@@ -380,7 +422,10 @@ class IslandAccessibilityService : AccessibilityService() {
             val m = rem / 60000
             if (m >= 60) "plein dans ${m / 60} h ${"%02d".format(m % 60)}" else "plein dans $m min"
         } else if (lvl >= 100) "chargé" else ""
-        IslandStore.upsert(Act(id = "charge", kind = Kind.CHARGE, title = "En charge", level = lvl, sub = sub), ttl = if (first) 4200 else 3000)
+        val plugged = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val wireless = plugged == BatteryManager.BATTERY_PLUGGED_WIRELESS
+        IslandStore.showStatus(Act(id = "charge", kind = Kind.CHARGE, title = if (wireless) "Charge sans fil" else "En charge",
+            level = lvl, sub = sub, variant = if (wireless) 1 else 0))
         if (first && rem <= 0 && lvl < 100) scope.launch { kotlinx.coroutines.delay(1500); if (IslandStore.acts.value.any { it.id == "charge" }) showCharge(false) }
     }
 

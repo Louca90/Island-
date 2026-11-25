@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -100,6 +101,7 @@ import com.louca.island.IslandStore
 import com.louca.island.Kind
 import com.louca.island.Settings
 import com.louca.island.ThemeMode
+import com.louca.island.sendPending
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -173,8 +175,12 @@ fun maskExtra(s: Settings): Dp =
 
 fun notifH(a: Act): Dp = (100 + (if (a.actions.isNotEmpty()) 52 else 0)).dp
 
+/** Status pop-ups are large during their first phase, whatever the user does. */
+fun isBig(a: Act?): Boolean = a != null && a.bigUntil > System.currentTimeMillis()
+
 fun isExpanded(a: Act?, flag: Boolean): Boolean = when (a?.kind) {
-    null, Kind.CHARGE, Kind.LOCK, Kind.SYSTEM, Kind.OTP, Kind.AUDIO -> false
+    Kind.CHARGE, Kind.SYSTEM, Kind.AUDIO, Kind.SHOT -> isBig(a)
+    null, Kind.LOCK, Kind.OTP -> false
     Kind.NOTIF, Kind.ALARM -> true
     Kind.CALL -> a.incoming || flag
     else -> flag
@@ -207,13 +213,14 @@ fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp, zones: List<Pair<Float, 
         Kind.NOTIF -> Spec(big, notifH(a), 34.dp)
         Kind.INBOX -> if (ex) Spec(big, IslandStore.currentNotif()?.let { notifH(it) } ?: 100.dp, 34.dp) else pill(224f)
         Kind.TORCH -> if (ex) Spec(big, 96.dp, 40.dp) else pill(176f)
-        Kind.CHARGE -> pill(if (a.sub.isNotBlank()) 270f else 222f)
+        Kind.CHARGE -> if (ex) Spec(big, 100.dp, 40.dp) else pill(if (a.sub.isNotBlank()) 270f else 222f)
+        Kind.SHOT -> if (ex) Spec(big, 136.dp, 36.dp) else pill(190f)
         Kind.OTP -> pill(236f)
         Kind.ALARM -> Spec(big, 84.dp, 42.dp)
         Kind.EVENT -> if (ex) Spec(big, 88.dp, 40.dp) else pill(184f)
-        Kind.AUDIO -> pill(240f)
+        Kind.AUDIO -> if (ex) Spec(big, 84.dp, 40.dp) else pill(240f)
         Kind.LOCK -> pill(128f)
-        Kind.SYSTEM -> pill(204f)
+        Kind.SYSTEM -> if (ex) Spec(big, 84.dp, 40.dp) else pill(204f)
         Kind.NAV -> if (ex) Spec(big, 92.dp, 40.dp) else pill(196f)
         Kind.LIVE -> if (ex) Spec(big, if (a.isSport) 92.dp else if (a.progress != -1f) 112.dp else 92.dp, 40.dp) else pill(200f)
     }
@@ -242,6 +249,7 @@ fun IslandRoot(
     onTouchZone: (android.graphics.Rect?) -> Unit = {},
 ) {
     val density = LocalDensity.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val primary = IslandStore.primary(acts, pick)
     val ex = isExpanded(primary, expandedFlag)
@@ -288,7 +296,7 @@ fun IslandRoot(
     // --- auto-collapse after a while
     var poke by remember { mutableIntStateOf(0) }
     LaunchedEffect(ex, primary?.id, poke) {
-        if (ex && primary?.kind != Kind.NOTIF && primary?.kind != Kind.INBOX && replyKey == null &&
+        if (ex && primary?.kind != Kind.NOTIF && primary?.kind != Kind.INBOX && replyKey == null && !isBig(primary) &&
             !(primary?.kind == Kind.CALL && primary.incoming)) {
             delay(9000); IslandStore.expanded.value = false
         }
@@ -349,6 +357,7 @@ fun IslandRoot(
                                     }
                                 } else IslandStore.expanded.value = true
                                 Kind.LOCK, Kind.CHARGE, Kind.ALARM, Kind.AUDIO, Kind.SYSTEM -> {}
+                                Kind.SHOT -> if (!isBig(p)) { viewShot(ctx, p); IslandStore.remove(p.id) }
                                 Kind.OTP -> IslandStore.copyOtp(p)
                                 Kind.CALL -> if (!p.incoming) IslandStore.expanded.value = !IslandStore.expanded.value
                                 else -> IslandStore.expanded.value = !IslandStore.expanded.value
@@ -356,7 +365,8 @@ fun IslandRoot(
                         },
                         onLongPress = {
                             val p = primaryState ?: return@detectTapGestures
-                            if (p.kind == Kind.LOCK) return@detectTapGestures
+                            if (p.kind == Kind.LOCK || isBig(p)) return@detectTapGestures
+                            if (p.kind == Kind.SHOT) { viewShot(ctx, p); IslandStore.remove(p.id); return@detectTapGestures }
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             val target = if (p.kind == Kind.INBOX) IslandStore.currentNotif() ?: p else p
                             target.open()
@@ -375,6 +385,7 @@ fun IslandRoot(
                             val p = primaryState
                             when {
                                 abs(dx) > abs(dy) && abs(dx) > t -> IslandStore.cycle(if (dx < 0) 1 else -1)
+                                isBig(p) -> {}
                                 dy < -t * .7f -> if (p?.kind == Kind.NOTIF) IslandStore.remove(p.id) else IslandStore.expanded.value = false
                                 dy > t * .7f && p != null && p.kind != Kind.NOTIF -> IslandStore.expanded.value = true
                             }
@@ -387,7 +398,7 @@ fun IslandRoot(
                         },
                     ) { ch, d ->
                         val k = primaryState?.kind
-                        if (k == Kind.LOCK || k == Kind.CHARGE || k == Kind.SYSTEM) return@detectDragGestures
+                        if (k == Kind.LOCK || k == Kind.CHARGE || k == Kind.SYSTEM || isBig(primaryState)) return@detectDragGestures
                         ch.consume(); dx += d.x; dy += d.y; poke++
                     }
                 },
@@ -561,6 +572,7 @@ private fun BubbleCore(a: Act, c: IslandColors, size: Dp, onTap: () -> Unit) {
             Kind.INBOX -> SmallAppIcon(a, c, size * .72f)
             Kind.EVENT -> CalendarIcon(c.fg, inner)
             Kind.TORCH -> FlashIcon(c.yellow, inner, on = true)
+            Kind.SHOT -> ShotThumb(a, c, size * .62f)
             Kind.NAV -> NavIcon(a, c, inner)
             Kind.LIVE -> when {
                 a.isSport -> T(a.score.replace(" ", ""), c.fg, 10, FontWeight.Bold, style = Num)
@@ -736,7 +748,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             ) { T("${a.level}", c.fg, 13, FontWeight.SemiBold, style = Num) }
         })
 
-        Kind.CHARGE -> CompactRow(h0, {
+        Kind.CHARGE -> if (ex) ChargeBig(a, c) else CompactRow(h0, {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BoltIcon(c.green, 18.dp, Modifier.padding(start = 4.dp))
                 if (a.sub.isBlank()) { Spacer(Modifier.width(5.dp)); T("En charge", c.fg, 13, FontWeight.Medium) }
@@ -818,7 +830,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             T(a.short, c.fg, 14, FontWeight.SemiBold, style = Num, modifier = Modifier.padding(end = 7.dp))
         })
 
-        Kind.AUDIO -> CompactRow(h0, {
+        Kind.AUDIO -> if (ex) AudioBig(a, c) else CompactRow(h0, {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 6.dp)) {
                 HeadphonesIcon(if (a.variant == 1) c.dim else c.fg, 18.dp)
                 Spacer(Modifier.width(6.dp))
@@ -844,7 +856,13 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
             T("Lampe", c.yellow, 13, FontWeight.SemiBold, modifier = Modifier.padding(end = 8.dp))
         })
 
-        Kind.SYSTEM -> CompactRow(h0, {
+        Kind.SHOT -> if (ex) ShotBig(a, c) else CompactRow(h0, {
+            Box(Modifier.padding(start = 4.dp)) { ShotThumb(a, c, h0 - 10.dp) }
+        }, {
+            T("Capture", c.fg, 13, FontWeight.SemiBold, modifier = Modifier.padding(end = 8.dp))
+        })
+
+        Kind.SYSTEM -> if (ex) SystemBig(a, c) else CompactRow(h0, {
             Box(Modifier.padding(start = 5.dp)) {
                 when (a.variant) {
                     0 -> BellIcon(c.fg, 18.dp, ring = true)
@@ -861,6 +879,163 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                 modifier = Modifier.padding(end = 7.dp))
         })
     }
+}
+
+// ------------------------------------------------------------------ status pop-ups (large phase)
+
+@Composable
+private fun StatusBig(c: IslandColors, tint: Color, icon: @Composable () -> Unit, title: String, sub: String,
+                      titleColor: Color = c.fg, end: @Composable () -> Unit = {}) {
+    Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(50.dp).clip(CircleShape).background(tint.copy(alpha = .18f)), contentAlignment = Alignment.Center) { icon() }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            T(title, titleColor, 16, FontWeight.SemiBold)
+            if (sub.isNotBlank()) T(sub, c.dim, 13)
+        }
+        end()
+    }
+}
+
+@Composable
+private fun SystemBig(a: Act, c: IslandColors) {
+    val purple = Color(0xFFBF5AF2)
+    val (tint, sub) = when (a.variant) {
+        0 -> c.fg to "Appels et notifications sonnent"
+        1 -> c.fg to "Le téléphone vibre sans sonner"
+        2 -> c.red to "Ni son ni vibration"
+        3 -> purple to "Appels et notifications en sourdine"
+        4 -> c.fg to "Ne pas déranger désactivé"
+        6 -> c.green to ""
+        else -> c.red to "Branchez le chargeur"
+    }
+    val title = if (a.variant == 5) "Batterie faible" else a.title
+    StatusBig(c, tint, {
+        when (a.variant) {
+            0 -> BellIcon(c.fg, 26.dp, ring = true)
+            1 -> VibrateIcon(c.fg, 28.dp)
+            2 -> BellIcon(c.red, 26.dp, slash = true)
+            3 -> MoonIcon(purple, c.bg, 26.dp)
+            4 -> MoonIcon(c.dim, c.bg, 26.dp)
+            6 -> CheckIcon(c.green, 26.dp)
+            else -> BatteryGlyph(a.level, c.fg, c.red, 30.dp)
+        }
+    }, title, sub, if (a.variant == 2 || a.variant == 5) c.red else c.fg) {
+        if (a.variant == 5) T("${a.level} %", c.red, 22, FontWeight.SemiBold, style = Num)
+    }
+}
+
+@Composable
+private fun ChargeBig(a: Act, c: IslandColors) {
+    val fill = remember { Animatable(0f) }
+    LaunchedEffect(a.level) { fill.animateTo(a.level / 100f, tween(900, easing = FastOutSlowInEasing)) }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(c.green.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
+                BoltIcon(c.green, 22.dp)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                T(a.title.ifBlank { "En charge" }, c.fg, 16, FontWeight.SemiBold)
+                T(a.sub.ifBlank { if (a.variant == 1) "Chargeur à induction" else "Câble branché" }, c.dim, 13)
+            }
+            T("${a.level} %", c.green, 24, FontWeight.SemiBold, style = Num)
+        }
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(c.track)) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth(fill.value).clip(RoundedCornerShape(3.dp)).background(c.green))
+        }
+    }
+}
+
+@Composable
+private fun AudioBig(a: Act, c: IslandColors) {
+    val off = a.variant == 1
+    StatusBig(c, if (off) c.dim else c.fg, { HeadphonesIcon(if (off) c.dim else c.fg, 26.dp) }, a.title,
+        if (off) "Déconnecté" else if (a.level >= 0) "Connecté · batterie" else "Connecté") {
+        if (!off && a.level >= 0) Row(verticalAlignment = Alignment.CenterVertically) {
+            T("${a.level} %", if (a.level <= 20) c.red else c.green, 20, FontWeight.SemiBold, style = Num)
+            Spacer(Modifier.width(6.dp))
+            BatteryGlyph(a.level, c.fg, if (a.level <= 20) c.red else c.green, 26.dp)
+        }
+    }
+}
+
+@Composable
+private fun ShotThumb(a: Act, c: IslandColors, h: Dp) {
+    val art = a.art
+    if (art != null) Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop,
+        modifier = Modifier.height(h).width(h * .62f).clip(RoundedCornerShape(h * .14f)))
+    else Box(Modifier.height(h).width(h * .62f).clip(RoundedCornerShape(h * .14f)).background(c.btn))
+}
+
+private fun viewShot(ctx: android.content.Context, a: Act) {
+    val uri = runCatching { android.net.Uri.parse(a.uri) }.getOrNull() ?: return
+    runCatching {
+        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, "image/*")
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    }
+}
+
+@Composable
+private fun ShotBig(a: Act, c: IslandColors) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val uri = remember(a.uri) { runCatching { android.net.Uri.parse(a.uri) }.getOrNull() }
+    val pop = remember { Animatable(.85f) }
+    LaunchedEffect(a.uri) { pop.animateTo(1f, tween(320, easing = FastOutSlowInEasing)) }
+    fun go(i: android.content.Intent) = runCatching {
+        ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+    Row(Modifier.fillMaxSize().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .pointerInput(a.uri) { detectTapGestures { viewShot(ctx, a); IslandStore.remove(a.id) } }) {
+            ShotThumb(a, c, 108.dp)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+            Column {
+                T(a.title, c.fg, 16, FontWeight.SemiBold)
+                T("Enregistrée dans la galerie", c.dim, 13)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ShotBtn("Partager", c.btn, c.fg, Modifier.weight(1f)) {
+                    if (uri == null) return@ShotBtn
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("image/*")
+                        .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    go(android.content.Intent.createChooser(send, "Partager la capture"))
+                    IslandStore.remove(a.id)
+                }
+                ShotBtn("Modifier", c.btn, c.fg, Modifier.weight(1f)) {
+                    if (uri == null) return@ShotBtn
+                    val edit = android.content.Intent(android.content.Intent.ACTION_EDIT).setDataAndType(uri, "image/*")
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    if (go(android.content.Intent.createChooser(edit, "Modifier avec")).isFailure) viewShot(ctx, a)
+                    IslandStore.remove(a.id)
+                }
+                ShotBtn("Supprimer", c.red.copy(alpha = .2f), c.red, Modifier.weight(1f)) {
+                    if (uri == null) return@ShotBtn
+                    runCatching {
+                        sendPending(android.provider.MediaStore.createDeleteRequest(ctx.contentResolver, listOf(uri)))
+                    }
+                    IslandStore.remove(a.id)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShotBtn(label: String, bg: Color, fg: Color, modifier: Modifier, onClick: () -> Unit) {
+    var down by remember { mutableStateOf(false) }
+    val sc by animateFloatAsState(if (down) .94f else 1f, spring(1f, 900f), label = "sb")
+    val click by rememberUpdatedState(onClick)
+    Box(
+        modifier.height(36.dp).graphicsLayer { scaleX = sc; scaleY = sc }.clip(RoundedCornerShape(18.dp)).background(bg)
+            .semantics { role = Role.Button }
+            .pointerInput(Unit) { detectTapGestures(onPress = { down = true; tryAwaitRelease(); down = false }, onTap = { click() }) },
+        contentAlignment = Alignment.Center,
+    ) { T(label, fg, 12, FontWeight.SemiBold) }
 }
 
 private fun stopRecord(a: Act) {

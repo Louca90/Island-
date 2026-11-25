@@ -208,7 +208,8 @@ object Demo {
         IslandStore.upsert(ringing)
     }
 
-    fun charge() = IslandStore.upsert(Act(id = "charge", kind = Kind.CHARGE, level = 78), ttl = 3400)
+    fun charge() = IslandStore.showStatus(Act(id = "charge", kind = Kind.CHARGE, title = "Charge sans fil", level = 78,
+        sub = "plein dans 1 h 05", variant = 1))
 
     fun lock() {
         val l = Act(id = "lock", kind = Kind.LOCK)
@@ -243,8 +244,8 @@ object Demo {
     )
 
     fun buds() {
-        IslandStore.upsert(Act(id = "buds", kind = Kind.AUDIO, pkg = IslandStore.DEMO, title = "Galaxy Buds", level = -1), ttl = 4500)
-        scope.launch { delay(900); IslandStore.upsert(Act(id = "buds", kind = Kind.AUDIO, pkg = IslandStore.DEMO, title = "Galaxy Buds", level = 82), ttl = 3600) }
+        IslandStore.showStatus(Act(id = "buds", kind = Kind.AUDIO, pkg = IslandStore.DEMO, title = "Galaxy Buds", level = -1))
+        scope.launch { delay(900); IslandStore.showStatus(Act(id = "buds", kind = Kind.AUDIO, pkg = IslandStore.DEMO, title = "Galaxy Buds", level = 82)) }
     }
 
     fun nav() = IslandStore.upsert(
@@ -271,11 +272,24 @@ object Demo {
             variant = 1, actions = listOf(ActBtn("Arrêter", null) { IslandStore.remove("rec:voice") }))
     )
 
+    fun shot() {
+        val bmp = android.graphics.Bitmap.createBitmap(360, 780, android.graphics.Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(bmp)
+        val paint = android.graphics.Paint().apply {
+            shader = android.graphics.LinearGradient(0f, 0f, 360f, 780f, 0xFF2B2F3A.toInt(), 0xFF0E0F12.toInt(), android.graphics.Shader.TileMode.CLAMP)
+        }
+        cv.drawRect(0f, 0f, 360f, 780f, paint)
+        val card = android.graphics.Paint().apply { color = 0x33FFFFFF }
+        for (i in 0 until 5) cv.drawRoundRect(28f, 120f + i * 120f, 332f, 210f + i * 120f, 22f, 22f, card)
+        IslandStore.showStatus(Act(id = "shot", kind = Kind.SHOT, pkg = IslandStore.DEMO, title = "Capture d'écran", art = bmp, stamp = now()),
+            bigMs = 6_000, smallMs = 5_000)
+    }
+
     private var sysI = 0
     fun system() {
         val list = listOf(2 to "Silencieux", 1 to "Vibreur", 0 to "Sonnerie", 3 to "Ne pas déranger", 5 to "Batterie faible · 15 %")
         val (v, t) = list[sysI++ % list.size]
-        IslandStore.upsert(Act(id = "sys", kind = Kind.SYSTEM, title = t, variant = v, level = 15, stamp = now()), ttl = 2200)
+        IslandStore.showStatus(Act(id = "sys", kind = Kind.SYSTEM, title = t, variant = v, level = 15, stamp = now()))
     }
 }
 
@@ -313,6 +327,7 @@ private fun Home() {
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { tick++ }
     val calOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.READ_CALENDAR) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val imgOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val btOk = remember(tick) { ctx.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var updMsg by remember { androidx.compose.runtime.mutableStateOf("") }
@@ -334,7 +349,7 @@ private fun Home() {
         PageDef("look", "Apparence", "Couleur, hauteur, largeur, position", "theme couleur noir graphite clair taille hauteur largeur position apparence", Color(0xFFBF5AF2)),
         PageDef("zones", "Caméra & zones mortes", "Repère caméra, zones à éviter, bulles", "zone morte camera repere trou bulle verrouille accueil sim operateur masque", Color(0xFFFF453A)),
         PageDef("notif", "Notifications & pop-ups", "Pop-ups Samsung, apps masquées", "pop-up popup bandeau samsung termux adb masquer app filtre bloquer notification", Color(0xFF30D158)),
-        PageDef("live", "Activités & intégrations", "Itinéraire, sport, alarme, agenda, écouteurs, paroles", "itineraire maps waze livraison sport live alarme agenda calendrier ecouteurs buds bluetooth paroles lyrics code verification otp systeme silencieux", Color(0xFF64D2FF)),
+        PageDef("live", "Activités & intégrations", "Itinéraire, sport, alarme, agenda, écouteurs, captures", "itineraire maps waze livraison sport live alarme agenda calendrier ecouteurs buds bluetooth paroles lyrics code verification otp systeme silencieux capture ecran screenshot", Color(0xFF64D2FF)),
         PageDef("standby", "Mode veille en charge", "Écran musique en paysage", "veille charge standby paysage paroles horloge grand format", Color(0xFF5E5CE6)),
         PageDef("behav", "Comportement", "Plein écran, volet, verrouillage, repos", "comportement plein ecran volet verrouillage cadenas repos pilule apercu", Color(0xFF8E8E93)),
         PageDef("update", "Mises à jour & sauvegarde", "GitHub, exporter, importer", "mise a jour update github version sauvegarde export import reglages", Color(0xFF32ADE6)),
@@ -391,6 +406,7 @@ private fun Home() {
                             Chip("Vocal") { Demo.voice() }
                             Chip("Silencieux / NPD") { Demo.system() }
                             Chip("Lampe") { Demo.torch() }
+                            Chip("Capture d'écran") { Demo.shot() }
                             Chip("Code de vérif") { Demo.otp() }
                             Chip("Alarme") { Demo.alarm() }
                             Chip("Rendez-vous") { Demo.event() }
@@ -478,7 +494,11 @@ private fun Home() {
                     Card("Intégrations") {
                         Toggle("Itinéraires", "Google Maps, Waze… : prochaine direction et distance.", s.showNav) { v -> Prefs.update { it.copy(showNav = v) } }
                         Toggle("Activités en direct", "Live Updates Android : livraisons, VTC, téléchargements, Quick Share, scores sportifs.", s.showLive) { v -> Prefs.update { it.copy(showLive = v) } }
-                        Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
+                        Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible. En grand 10 s, puis en petit 5 s.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
+                        Toggle("Captures d'écran", "Aperçu avec Partager, Modifier et Supprimer juste après la capture.", s.showShots) { v -> Prefs.update { it.copy(showShots = v) } }
+                        if (s.showShots && !imgOk) Step("Accès aux photos", "Pour voir les nouvelles captures d'écran.", false, "Autoriser") {
+                            permLauncher.launch(arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES))
+                        }
                         Hint("Toujours actifs : musique, chrono et minuteur, dictaphone, enregistreur d'écran, entraînements (Samsung Health…), appels, charge, déverrouillage.")
                     }
                 }

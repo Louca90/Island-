@@ -449,7 +449,7 @@ class IslandNotificationService : NotificationListenerService() {
                         actions = allBtns, contentIntent = n.contentIntent,
                         stamp = System.currentTimeMillis(),
                     ),
-                    ttl = 6000
+                    ttl = 10_000
                 )
             }
         }

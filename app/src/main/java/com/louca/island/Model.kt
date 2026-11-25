@@ -50,6 +50,7 @@ data class Settings(
     val eventLead: Float = 15f,
     val showBuds: Boolean = true,
     val showLyrics: Boolean = true,
+    val showShots: Boolean = true,
     val updateRepo: String = "",
     val guideSeen: Boolean = false,
     /** Dead zones along the status bar: (start dp from the left edge, width dp). */
@@ -103,6 +104,7 @@ object Prefs {
             eventLead = sp.getFloat("eventLead", 15f),
             showBuds = sp.getBoolean("buds", true),
             showLyrics = sp.getBoolean("lyrics", true),
+            showShots = sp.getBoolean("shots", true),
             updateRepo = sp.getString("repo", "Louca90/Island-")?.let { if (it == "Louca90/Island") "Louca90/Island-" else it } ?: "Louca90/Island-",
             guideSeen = sp.getBoolean("guideSeen", false),
             deadZones = parseZones(sp.getString("dz", "")),
@@ -160,7 +162,7 @@ object Prefs {
             .putBoolean("nav", n.showNav).putBoolean("live", n.showLive).putBoolean("sys", n.showSystem)
             .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
-            .putBoolean("lyrics", n.showLyrics).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
+            .putBoolean("lyrics", n.showLyrics).putBoolean("shots", n.showShots).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
             .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones).putBoolean("standby", n.standbyOnCharge)
             .putBoolean("standbyWireless", n.standbyWirelessOnly).putBoolean("standbyLock", n.standbyLockOnly)
             .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })
@@ -170,7 +172,7 @@ object Prefs {
 
 enum class Kind(val prio: Int) {
     INBOX(0), MUSIC(1), LIVE(2), TIMER(2), EVENT(2), TORCH(3), RECORD(3), NAV(4),
-    CHARGE(5), SYSTEM(5), AUDIO(5), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
+    CHARGE(5), SYSTEM(5), AUDIO(5), SHOT(5), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
 }
 
 data class Lyrics(val key: String, val lines: List<Pair<Long, String>>)
@@ -243,11 +245,14 @@ data class Act(
     val teamB: String = "",
     val score: String = "",
     val liked: Boolean? = null,
+    /** Status pop-ups: shown large until this time (ms), then small. */
+    val bigUntil: Long = 0,
+    val uri: String = "",
     val shuffle: Boolean? = null,
     val stamp: Long = System.currentTimeMillis(),
 ) {
     val urgent get() = kind == Kind.CALL || kind == Kind.NOTIF || kind == Kind.CHARGE || kind == Kind.LOCK ||
-        kind == Kind.SYSTEM || kind == Kind.OTP || kind == Kind.ALARM || kind == Kind.AUDIO
+        kind == Kind.SYSTEM || kind == Kind.OTP || kind == Kind.ALARM || kind == Kind.AUDIO || kind == Kind.SHOT
     val lyricsKey get() = "$title|$text"
     val isSport get() = score.isNotEmpty()
 
@@ -389,7 +394,30 @@ object IslandStore {
         timers[id] = scope.launch { delay(ttl); remove(id) }
     }
 
+    private val statusJobs = mutableMapOf<String, Job>()
+
+    /**
+     * Status pop-ups (sound mode, charging, low battery, earbuds, screenshot):
+     * large for [bigMs] and impossible to dismiss, then small for [smallMs], then gone.
+     * A refresh while still large only updates the content.
+     */
+    fun showStatus(a: Act, bigMs: Long = 10_000, smallMs: Long = 5_000) {
+        val now = System.currentTimeMillis()
+        val cur = acts.value.find { it.id == a.id }
+        if (cur != null && cur.bigUntil > now) {
+            acts.update { l -> l.map { if (it.id == a.id) a.copy(bigUntil = cur.bigUntil, stamp = it.stamp) else it } }
+            return
+        }
+        upsert(a.copy(bigUntil = now + bigMs))
+        statusJobs.remove(a.id)?.cancel()
+        statusJobs[a.id] = scope.launch {
+            delay(bigMs)
+            acts.value.find { it.id == a.id }?.let { upsert(it.copy(bigUntil = 0), ttl = smallMs) }
+        }
+    }
+
     fun remove(id: String) {
+        statusJobs.remove(id)?.cancel()
         timers.remove(id)?.cancel()
         acts.update { l -> l.filterNot { it.id == id } }
         if (acts.value.none { !it.urgent }) expanded.value = false
