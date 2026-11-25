@@ -279,6 +279,7 @@ fun IslandRoot(
     val alphaA = remember { Animatable(0f) }
     var shown by remember { mutableStateOf(false) }
     var swipeTarget by remember { mutableStateOf<String?>(null) }
+    var swipedFrom by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(sp.w, sp.h, sp.r, visible) {
         if (!visible) {
             if (shown) {
@@ -453,6 +454,7 @@ fun IslandRoot(
                                 if (n != null && (abs(dragX.value) > dd * .3f || (abs(vx) > 700.dp.toPx() && vx * dx > 0))) {
                                     scope.launch {
                                         dragX.animateTo(-d * dd, spring(1f, 520f), initialVelocity = vx)
+                                        swipedFrom = p?.id
                                         swipeTarget = n.id
                                         IslandStore.cycle(d)
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
@@ -509,10 +511,12 @@ fun IslandRoot(
                 contentAlignment = Alignment.TopCenter,
                 modifier = Modifier.fillMaxSize().graphicsLayer { translationX = off; this.alpha = 1f - prog * .6f },
                 transitionSpec = {
-                    if (swipeTarget != null && targetState.id == swipeTarget)
-                        // the new content is already on screen (it slid in under the finger): swap instantly,
-                        // without keeping the old one alive behind it during a size animation
-                        return@AnimatedContent (fadeIn(snap()) togetherWith fadeOut(snap()))
+                    // After a finger swipe the new content is already on screen: swap with no transition at all.
+                    // Decided once per change (fxMode), never re-read from live state: swipeTarget is cleared
+                    // right after, and re-reading it here used to restart a normal transition mid-way.
+                    if (!fxMode[1])
+                        return@AnimatedContent (androidx.compose.animation.EnterTransition.None togetherWith
+                            androidx.compose.animation.ExitTransition.None)
                             .using(SizeTransform(clip = false) { _, _ -> snap() })
                     val opening = !initialState.ex && targetState.ex
                     val same = initialState.id == targetState.id
@@ -530,6 +534,8 @@ fun IslandRoot(
                 label = "content",
             ) { k ->
                 val blurFx = fxMode[0]; val iconFx = fxMode[1]
+                // the content that slid away under the finger must not be drawn again, not even for one frame
+                val goneNow = !iconFx && transition.targetState == EnterExitState.PostExit
                 // Apple-style: the old content melts into a blur as the shape morphs, the new one comes into focus.
                 val blur by transition.animateDp(
                     transitionSpec = {
@@ -567,6 +573,7 @@ fun IslandRoot(
                         .fillMaxSize()
                         .wrapContentSize(Alignment.TopCenter, unbounded = true)
                         .requiredSize(sp2.w, sp2.h)
+                        .graphicsLayer { if (goneNow) this.alpha = 0f }
                         .blur(blur, BlurredEdgeTreatment.Unbounded)
                         .padding(top = extra)
                 ) {
@@ -629,7 +636,7 @@ fun IslandRoot(
                 val offX by animateDpAsState(tx, spring(1f, 500f), label = "bx")
                 val offY by animateDpAsState(ty, spring(1f, 500f), label = "by")
                 Bubble(
-                    b, c, h0,
+                    b, c, h0, soft = b.id == swipedFrom,
                     Modifier
                         .align(Alignment.TopCenter)
                         .offset(x = offX, y = offY)
@@ -644,9 +651,9 @@ fun IslandRoot(
 // ------------------------------------------------------------------ pieces
 
 @Composable
-private fun Bubble(a: Act, c: IslandColors, size: Dp, modifier: Modifier, onTap: () -> Unit) {
+private fun Bubble(a: Act, c: IslandColors, size: Dp, soft: Boolean = false, modifier: Modifier, onTap: () -> Unit) {
     Box(modifier) {
-        BubbleCore(a, c, size, onTap)
+        BubbleCore(a, c, size, soft, onTap)
         if (a.kind == Kind.INBOX) CountBadge(a.level, c, Modifier.align(Alignment.BottomEnd).offset(x = 3.dp, y = 2.dp))
     }
 }
@@ -678,17 +685,23 @@ private fun CountBadge(n: Int, c: IslandColors, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun BubbleCore(a: Act, c: IslandColors, size: Dp, onTap: () -> Unit) {
+private fun BubbleCore(a: Act, c: IslandColors, size: Dp, soft: Boolean, onTap: () -> Unit) {
     val modifier = Modifier
     val appear = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { appear.animateTo(1f, tween(300, easing = FastOutSlowInEasing)) }
+    // soft: the activity just slid out of the island; it settles in place instead of sliding out from behind
+    val still = remember { soft }
+    LaunchedEffect(Unit) {
+        if (still) delay(120)
+        appear.animateTo(1f, tween(if (still) 240 else 300, easing = FastOutSlowInEasing))
+    }
     val tap by rememberUpdatedState(onTap)
     Box(
         modifier
             .graphicsLayer {
-                scaleX = appear.value; scaleY = appear.value
+                val sc = if (still) .8f + .2f * appear.value else appear.value
+                scaleX = sc; scaleY = sc
                 alpha = appear.value.coerceIn(0f, 1f)
-                translationX = (1f - appear.value) * -size.toPx() * .6f
+                translationX = if (still) 0f else (1f - appear.value) * -size.toPx() * .6f
             }
             .size(size)
             .clip(CircleShape)
