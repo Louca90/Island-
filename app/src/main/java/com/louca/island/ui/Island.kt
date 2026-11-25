@@ -105,6 +105,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 // ------------------------------------------------------------------ colors
 
@@ -114,6 +115,7 @@ data class IslandColors(
     val orange get() = if (dark) Color(0xFFFF9F0A) else Color(0xFFC86400)
     val red get() = if (dark) Color(0xFFFF453A) else Color(0xFFD02A20)
     val green get() = if (dark) Color(0xFF30D158) else Color(0xFF1C8C3E)
+    val yellow get() = if (dark) Color(0xFFFFD60A) else Color(0xFFB08800)
 }
 
 private fun darkColors(bg: Color) =
@@ -169,8 +171,7 @@ val LocalMask = androidx.compose.runtime.staticCompositionLocalOf { Mask(false, 
 fun maskExtra(s: Settings): Dp =
     if (s.camMask) (s.pillH / 2 + s.camSize / 2 + 6f - 12f).coerceAtLeast(0f).dp else 0.dp
 
-fun notifH(a: Act): Dp =
-    (100 + (if (a.actions.isNotEmpty()) 52 else 0) + (if (IslandStore.replying.value == a.key) 54 else 0)).dp
+fun notifH(a: Act): Dp = (100 + (if (a.actions.isNotEmpty()) 52 else 0)).dp
 
 fun isExpanded(a: Act?, flag: Boolean): Boolean = when (a?.kind) {
     null, Kind.CHARGE, Kind.LOCK, Kind.SYSTEM, Kind.OTP, Kind.AUDIO -> false
@@ -179,10 +180,23 @@ fun isExpanded(a: Act?, flag: Boolean): Boolean = when (a?.kind) {
     else -> flag
 }
 
-fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp): Spec {
+/** Largest half-width a compact pill can take without touching a dead zone. */
+fun maxHalf(zones: List<Pair<Float, Float>>, center: Float): Float {
+    var m = Float.MAX_VALUE
+    zones.forEach { (x, w) ->
+        when {
+            x >= center -> m = min(m, x - center)
+            x + w <= center -> m = min(m, center - (x + w))
+        }
+    }
+    return m - 4f
+}
+
+fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp, zones: List<Pair<Float, Float>> = emptyList()): Spec {
     val h = compactH(s)
     val big = min(s.expW, maxW.value - 16f).dp
-    fun pill(w: Float) = Spec((w * s.pillW).dp, h, h / 2)
+    val half = maxHalf(zones, maxW.value / 2 + s.offsetX)
+    fun pill(w: Float) = Spec(min(w * s.pillW, max(half * 2, h.value * 2)).dp, h, h / 2)
     if (a == null) return if (s.showIdle) pill(96f) else Spec(h, h, h / 2)
     val ex = isExpanded(a, flag)
     val base = when (a.kind) {
@@ -191,7 +205,8 @@ fun spec(a: Act?, flag: Boolean, s: Settings, maxW: Dp): Spec {
         Kind.RECORD -> if (ex) Spec(big, 84.dp, 40.dp) else pill(212f)
         Kind.CALL -> if (ex) Spec(big, 84.dp, 42.dp) else pill(196f)
         Kind.NOTIF -> Spec(big, notifH(a), 34.dp)
-        Kind.INBOX -> if (ex) Spec(big, IslandStore.currentNotif()?.let { notifH(it) } ?: 100.dp, 34.dp) else pill(150f)
+        Kind.INBOX -> if (ex) Spec(big, IslandStore.currentNotif()?.let { notifH(it) } ?: 100.dp, 34.dp) else pill(224f)
+        Kind.TORCH -> if (ex) Spec(big, 96.dp, 40.dp) else pill(176f)
         Kind.CHARGE -> pill(if (a.sub.isNotBlank()) 270f else 222f)
         Kind.OTP -> pill(236f)
         Kind.ALARM -> Spec(big, 84.dp, 42.dp)
@@ -223,6 +238,7 @@ fun IslandRoot(
     hidden: Boolean,
     maxW: Dp,
     shiftX: Dp = 0.dp,
+    zones: List<Pair<Float, Float>> = emptyList(),
     onTouchZone: (android.graphics.Rect?) -> Unit = {},
 ) {
     val density = LocalDensity.current
@@ -237,7 +253,7 @@ fun IslandRoot(
     lyr?.key; lyrOpen
     notifList.size + inboxIdx + (replyKey?.length ?: 0)
     val bubbles = if (primary?.kind == Kind.NOTIF) emptyList() else IslandStore.others(acts, primary)
-    val sp = spec(primary, expandedFlag, s, maxW)
+    val sp = spec(primary, expandedFlag, s, maxW, zones)
     val h0 = compactH(s)
     val visible = !hidden && (primary != null || s.showIdle)
 
@@ -403,7 +419,7 @@ fun IslandRoot(
                 val cache = remember { arrayOfNulls<Act>(1) }
                 val a = all.find { it.id == k.id } ?: cache[0]
                 if (a != null) cache[0] = a
-                val sp2 = spec(a, k.ex, s, maxW)
+                val sp2 = spec(a, k.ex, s, maxW, zones)
                 val extra = if (k.ex) maskExtra(s) else 0.dp
                 Box(
                     Modifier
@@ -427,10 +443,26 @@ fun IslandRoot(
             }
         }
 
+        // Free slots next to the pill: right side first, then left, skipping dead zones and screen edges.
+        val slots = remember(bubbles.size, sp.w, zones, maxW, shiftX, h0) {
+            val center = maxW.value / 2 + shiftX.value
+            fun free(off: Float): Boolean {
+                val l = center + off - h0.value / 2; val r = center + off + h0.value / 2
+                if (l < 2f || r > maxW.value - 2f) return false
+                return zones.none { (x, zw) -> l < x + zw && r > x }
+            }
+            val out = mutableListOf<Pair<Int, Int>>()
+            for (k in 0 until 6) { val off = sp.w.value / 2 + 6f + h0.value / 2 + k * (h0.value + 6f); if (free(off)) out += 1 to k else break }
+            for (k in 0 until 6) { val off = -(sp.w.value / 2 + 6f + h0.value / 2 + k * (h0.value + 6f)); if (free(off)) out += -1 to k else break }
+            out
+        }
         bubbles.forEachIndexed { i, b ->
+            val slot = slots.getOrNull(i)
+            if (!ex && slot == null) return@forEachIndexed
             androidx.compose.runtime.key(b.id) {
-                // compact: to the right of the pill · expanded: a row under the card
-                val tx = if (ex) (h0 + 6.dp) * (i - (bubbles.size - 1) / 2f) else w / 2 + 6.dp + h0 / 2 + (h0 + 6.dp) * i
+                // compact: beside the pill in a free slot · expanded: a row under the card
+                val tx = if (ex) (h0 + 6.dp) * (i - (bubbles.size - 1) / 2f)
+                    else (w / 2 + 6.dp + h0 / 2 + (h0 + 6.dp) * slot!!.second) * slot.first.toFloat()
                 val ty = if (ex) h + 10.dp else 0.dp
                 val offX by animateDpAsState(tx, spring(1f, 500f), label = "bx")
                 val offY by animateDpAsState(ty, spring(1f, 500f), label = "by")
@@ -494,10 +526,11 @@ private fun BubbleCore(a: Act, c: IslandColors, size: Dp, onTap: () -> Unit) {
                 )
             } else Equalizer(a.playing, musicAccent(a, c), inner * .8f)
             Kind.TIMER -> StopwatchIcon(rememberSeconds(a), c.orange, inner)
-            Kind.RECORD -> RecDot(c.red, inner)
+            Kind.RECORD -> if (a.variant == 1) MicIcon(c.red, inner) else ScreenRecIcon(c.red, inner)
             Kind.CALL -> HandsetIcon(c.green, inner * .85f)
             Kind.INBOX -> SmallAppIcon(a, c, size * .72f)
             Kind.EVENT -> CalendarIcon(c.fg, inner)
+            Kind.TORCH -> FlashIcon(c.yellow, inner, on = true)
             Kind.NAV -> NavIcon(a, c, inner)
             Kind.LIVE -> when {
                 a.isSport -> T(a.score.replace(" ", ""), c.fg, 10, FontWeight.Bold, style = Num)
@@ -635,8 +668,7 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                 if (a.variant == 1) {
                     MicIcon(c.red, 18.dp, Modifier.padding(start = 5.dp))
                 } else {
-                    RecDot(c.red, 18.dp, Modifier.padding(start = 3.dp))
-                    Spacer(Modifier.width(4.dp)); T("REC", c.red, 13, FontWeight.Bold)
+                    ScreenRecIcon(c.red, 20.dp, Modifier.padding(start = 5.dp))
                 }
             }
         }, {
@@ -773,6 +805,12 @@ private fun Content(a: Act, ex: Boolean, c: IslandColors, h0: Dp, poke: () -> Un
                     else -> T("Connecté", c.green, 12, FontWeight.Medium)
                 }
             }
+        })
+
+        Kind.TORCH -> if (ex) TorchExpanded(a, c, poke) else CompactRow(h0, {
+            Box(Modifier.padding(start = 6.dp)) { FlashIcon(c.yellow, 19.dp, on = true) }
+        }, {
+            T("Lampe", c.yellow, 13, FontWeight.SemiBold, modifier = Modifier.padding(end = 8.dp))
         })
 
         Kind.SYSTEM -> CompactRow(h0, {
@@ -1033,7 +1071,7 @@ private fun TimerExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
 private fun RecordExpanded(a: Act, c: IslandColors) {
     Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(48.dp).clip(CircleShape).background(c.red.copy(alpha = .18f)), contentAlignment = Alignment.Center) {
-            RecDot(c.red, 26.dp)
+            if (a.variant == 1) MicIcon(c.red, 24.dp) else ScreenRecIcon(c.red, 26.dp)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -1105,18 +1143,12 @@ private fun NotifBody(a: Act, c: IslandColors, poke: () -> Unit, counter: String
                     val on = replying && b.isReply
                     Pill(b.label, if (on) c.fg else c.btn, if (on) c.bg else c.fg, Modifier.weight(1f)) {
                         poke()
-                        if (b.isReply) {
-                            IslandStore.replying.value = if (replying) null else a.key
-                            IslandStore.extend(a.id, 60_000)
-                        } else { b.fire(); onAction() }
+                        if (b.isReply) IslandStore.startReply(a) else { b.fire(); onAction() }
                     }
                 }
             }
         }
-        if (replying) {
-            Spacer(Modifier.height(10.dp))
-            ReplyRow(a, c, poke)
-        }
+
     }
 }
 
@@ -1185,44 +1217,57 @@ private fun InboxCard(c: IslandColors, poke: () -> Unit) {
         Modifier
             .fillMaxSize()
             .pointerInput(Unit) {
-                var tx = 0f; var ty = 0f
+                var tx = 0f; var ty = 0f; var axis = 0
+                val vt = androidx.compose.ui.input.pointer.util.VelocityTracker()
                 detectDragGestures(
-                    onDragStart = { tx = 0f; ty = 0f },
+                    onDragStart = { tx = 0f; ty = 0f; axis = 0; vt.resetTracking() },
                     onDragEnd = {
+                        val v = vt.calculateVelocity()
                         val l = IslandStore.notifs.value
                         val cur = IslandStore.inboxIndex.value.coerceIn(0, (l.size - 1).coerceAtLeast(0))
-                        val t = 44.dp.toPx()
+                        val t = 24.dp.toPx()
+                        val fling = 700.dp.toPx()
                         scope.launch {
                             when {
-                                abs(tx) > abs(ty) && abs(tx) > 90.dp.toPx() -> {
-                                    dx.animateTo(if (tx > 0) size.width * 1.2f else -size.width * 1.2f, tween(180))
+                                axis == 1 && (abs(tx) > size.width * .32f || abs(v.x) > fling * 1.6f) -> {
+                                    val sgn = if ((if (abs(v.x) > fling * 1.6f) v.x else tx) > 0) 1f else -1f
+                                    dx.animateTo(sgn * size.width * 1.15f, tween(200, easing = FastOutSlowInEasing))
                                     l.getOrNull(cur)?.let { IslandStore.dismissNotif(it.key) }
-                                    dx.snapTo(0f); dy.snapTo(0f)
+                                    dx.snapTo(0f)
                                 }
-                                abs(ty) > abs(tx) && ty > t && cur < l.lastIndex -> {
-                                    dir = 1; IslandStore.inboxIndex.value = cur + 1; IslandStore.replying.value = null
-                                    dy.snapTo(0f); dx.snapTo(0f)
+                                axis == 1 -> dx.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
+                                axis == 2 && (ty > t || v.y > fling) && cur < l.lastIndex -> {
+                                    dir = 1; IslandStore.inboxIndex.value = cur + 1
                                 }
-                                abs(ty) > abs(tx) && ty < -t && cur > 0 -> {
-                                    dir = -1; IslandStore.inboxIndex.value = cur - 1; IslandStore.replying.value = null
-                                    dy.snapTo(0f); dx.snapTo(0f)
+                                axis == 2 && (ty < -t || v.y < -fling) && cur > 0 -> {
+                                    dir = -1; IslandStore.inboxIndex.value = cur - 1
                                 }
-                                abs(ty) > abs(tx) && ty < -t && cur == 0 -> {
-                                    IslandStore.expanded.value = false
-                                    dy.snapTo(0f); dx.snapTo(0f)
-                                }
-                                else -> {
-                                    launch { dx.animateTo(0f, tween(220, easing = FastOutSlowInEasing)) }
-                                    dy.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
-                                }
+                                axis == 2 && (ty < -t || v.y < -fling) && cur == 0 -> IslandStore.expanded.value = false
                             }
                         }
                     },
+                    onDragCancel = { scope.launch { dx.animateTo(0f, tween(220)) } },
                 ) { ch, d ->
-                    ch.consume(); poke(); tx += d.x; ty += d.y
+                    ch.consume(); poke()
+                    vt.addPosition(ch.uptimeMillis, ch.position)
+                    tx += d.x; ty += d.y
+                    if (axis == 0 && (abs(tx) > 8.dp.toPx() || abs(ty) > 8.dp.toPx())) axis = if (abs(tx) > abs(ty)) 1 else 2
+                    if (axis == 1) scope.launch { dx.snapTo(tx) }
                 }
             },
     ) {
+        // Delete preview: red layer with a bin that grows as you swipe sideways.
+        val prog = (abs(dx.value) / 140f).coerceIn(0f, 1f)
+        if (dx.value != 0f) {
+            Box(
+                Modifier.fillMaxSize().background(c.red.copy(alpha = .25f + .6f * prog)),
+                contentAlignment = if (dx.value > 0) Alignment.CenterStart else Alignment.CenterEnd,
+            ) {
+                TrashIcon(Color.White, 24.dp, Modifier.padding(horizontal = 26.dp).graphicsLayer {
+                    val sc = .6f + .4f * prog; scaleX = sc; scaleY = sc; alpha = prog
+                })
+            }
+        }
         AnimatedContent(
             targetState = item.key,
             transitionSpec = {
@@ -1241,9 +1286,11 @@ private fun InboxCard(c: IslandColors, poke: () -> Unit) {
                         .fillMaxSize()
                         .graphicsLayer {
                             translationX = dx.value
-                            translationY = 0f
-                            alpha = 1f - (abs(dx.value) / (size.width * 1.2f)).coerceIn(0f, .9f)
+                            val sc = 1f - (abs(dx.value) / size.width * .06f).coerceIn(0f, .06f)
+                            scaleX = sc; scaleY = sc
                         }
+                        .clip(RoundedCornerShape(34.dp))
+                        .background(c.bg)
                 ) {
                     NotifBody(
                         a, c, poke,
@@ -1314,6 +1361,65 @@ private fun LyricsView(lines: List<Pair<Long, String>>, pos: Long, c: IslandColo
                     .fillMaxWidth()
                     .graphicsLayer { scaleX = sc; scaleY = sc; transformOrigin = TransformOrigin(0f, .5f) }
                     .pointerInput(i) { detectTapGestures { onSeek(lines[i].first) } },
+            )
+        }
+    }
+}
+
+
+@Composable
+private fun TorchExpanded(a: Act, c: IslandColors, poke: () -> Unit) {
+    val max = a.duration.toInt().coerceAtLeast(1)
+    var local by remember(a.level) { mutableIntStateOf(a.level.coerceIn(1, max)) }
+    Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(50.dp).clip(CircleShape).background(c.yellow.copy(alpha = .2f)), contentAlignment = Alignment.Center) {
+            FlashIcon(c.yellow, 28.dp, on = true)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            T("Lampe torche", c.fg, 15, FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            if (max > 1) {
+                BoxWithConstraints(
+                    Modifier.fillMaxWidth().height(26.dp).clip(RoundedCornerShape(13.dp)).background(c.track)
+                        .pointerInput(max) {
+                            fun set(x: Float) {
+                                val l = (1 + ((x / size.width).coerceIn(0f, 1f) * (max - 1)).roundToInt()).coerceIn(1, max)
+                                if (l != local) { local = l; poke(); if (a.pkg == IslandStore.DEMO) IslandStore.upsert(a.copy(level = l)) else IslandStore.torchLevel?.invoke(l) }
+                            }
+                            detectTapGestures { set(it.x) }
+                        }
+                        .pointerInput(max) {
+                            detectHorizontalDragGestures { ch, _ ->
+                                ch.consume()
+                                val l = (1 + ((ch.position.x / size.width).coerceIn(0f, 1f) * (max - 1)).roundToInt()).coerceIn(1, max)
+                                if (l != local) { local = l; poke(); if (a.pkg == IslandStore.DEMO) IslandStore.upsert(a.copy(level = l)) else IslandStore.torchLevel?.invoke(l) }
+                            }
+                        },
+                ) {
+                    val f by animateFloatAsState(local.toFloat() / max, tween(180), label = "tl")
+                    Box(Modifier.fillMaxWidth(f).fillMaxSize().clip(RoundedCornerShape(13.dp)).background(c.yellow))
+                }
+            } else T("Allumée", c.dim, 13)
+        }
+        Spacer(Modifier.width(12.dp))
+        Pill("Éteindre", c.btn, c.fg) {
+            poke()
+            if (a.pkg == IslandStore.DEMO) IslandStore.remove("torch") else IslandStore.torchOff?.invoke()
+        }
+    }
+}
+
+/** Red outlines over the status bar showing the dead zones (calibration). */
+@Composable
+fun ZonesOverlay(zones: List<Pair<Float, Float>>, h: Dp) {
+    Box(Modifier.fillMaxSize()) {
+        zones.forEach { (x, w) ->
+            Box(
+                Modifier.offset(x = x.dp).size(w.dp, h)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x55FF3B30))
+                    .border(1.5.dp, Color(0xFFFF3B30), RoundedCornerShape(8.dp))
             )
         }
     }

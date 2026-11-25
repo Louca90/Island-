@@ -52,7 +52,20 @@ data class Settings(
     val showLyrics: Boolean = true,
     val updateRepo: String = "",
     val guideSeen: Boolean = false,
+    /** Dead zones along the status bar: (start dp from the left edge, width dp). */
+    val deadZones: List<Pair<Float, Float>> = emptyList(),
+    /** Same, used while the lock screen is showing (operator name, etc.). */
+    val deadZonesLock: List<Pair<Float, Float>> = emptyList(),
+    val showZones: Boolean = false,
 )
+
+private fun parseZones(v: String?): List<Pair<Float, Float>> = (v ?: "").split(';').mapNotNull {
+    val p = it.split(':')
+    if (p.size != 2) return@mapNotNull null
+    val x = p[0].toFloatOrNull() ?: return@mapNotNull null
+    val w = p[1].toFloatOrNull() ?: return@mapNotNull null
+    x to w
+}
 
 object Prefs {
     private lateinit var sp: SharedPreferences
@@ -89,6 +102,9 @@ object Prefs {
             showLyrics = sp.getBoolean("lyrics", true),
             updateRepo = sp.getString("repo", "Louca90/Island-")?.let { if (it == "Louca90/Island") "Louca90/Island-" else it } ?: "Louca90/Island-",
             guideSeen = sp.getBoolean("guideSeen", false),
+            deadZones = parseZones(sp.getString("dz", "")),
+            deadZonesLock = parseZones(sp.getString("dzLock", "")),
+            showZones = sp.getBoolean("dzShow", false),
         )
     }
 
@@ -139,12 +155,14 @@ object Prefs {
             .putStringSet("blocked", n.blocked).putBoolean("otp", n.showOtp).putBoolean("alarm", n.showAlarm)
             .putBoolean("events", n.showEvents).putFloat("eventLead", n.eventLead).putBoolean("buds", n.showBuds)
             .putBoolean("lyrics", n.showLyrics).putString("repo", n.updateRepo).putBoolean("guideSeen", n.guideSeen)
+            .putString("dz", n.deadZones.joinToString(";") { "${it.first}:${it.second}" }).putBoolean("dzShow", n.showZones)
+            .putString("dzLock", n.deadZonesLock.joinToString(";") { "${it.first}:${it.second}" })
             .apply()
     }
 }
 
 enum class Kind(val prio: Int) {
-    INBOX(0), MUSIC(1), LIVE(2), TIMER(2), EVENT(2), RECORD(3), NAV(4),
+    INBOX(0), MUSIC(1), LIVE(2), TIMER(2), EVENT(2), TORCH(3), RECORD(3), NAV(4),
     CHARGE(5), SYSTEM(5), AUDIO(5), NOTIF(6), OTP(6), LOCK(7), CALL(8), ALARM(9)
 }
 
@@ -264,6 +282,8 @@ object IslandStore {
     val expanded = MutableStateFlow(false)
     val swipeDir = MutableStateFlow(0)
     val wallTick = MutableStateFlow(0)
+    /** True while the lock screen is showing (picks the lock-screen dead zones). */
+    val locked = MutableStateFlow(false)
 
     val lyrics = MutableStateFlow<Lyrics?>(null)
     val lyricsOpen = MutableStateFlow(false)
@@ -278,6 +298,24 @@ object IslandStore {
     val notifs = MutableStateFlow<List<Act>>(emptyList())
     val inboxIndex = MutableStateFlow(0)
     val replying = MutableStateFlow<String?>(null)
+    var replyTarget: Act? = null
+
+    /** Opens the reply sheet (a real window, so the keyboard works). */
+    fun startReply(a: Act) {
+        replyTarget = a
+        replying.value = a.key
+        extend(a.id, 60_000)
+        runCatching {
+            appContext.startActivity(
+                android.content.Intent(appContext, ReplyActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            )
+        }
+    }
+
+    // ---- torch (set by the accessibility service)
+    var torchOff: (() -> Unit)? = null
+    var torchLevel: ((Int) -> Unit)? = null
     var cancelNotif: ((String) -> Unit)? = null
 
     private fun syncInbox() {

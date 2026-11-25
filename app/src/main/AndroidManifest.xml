@@ -29,6 +29,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".ReplyActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Island.Reply"
+            android:windowSoftInputMode="stateVisible|adjustResize" />
         <service
             android:name=".IslandAccessibilityService"
             android:exported="true"

@@ -136,16 +136,19 @@ class IslandAccessibilityService : AccessibilityService() {
             val s = Prefs.state.value
             when (i.action) {
                 Intent.ACTION_SCREEN_OFF -> {
+                    IslandStore.locked.value = true
                     IslandStore.expanded.value = false
                     IslandStore.remove("notif")
                 }
                 Intent.ACTION_SCREEN_ON -> {
                     IslandStore.wallTick.value++
+                    IslandStore.locked.value = km.isKeyguardLocked
                     if (s.lockAnim && km.isKeyguardLocked) {
                         IslandStore.upsert(Act(id = "lock", kind = Kind.LOCK, title = "Verrouillé"))
                     }
                 }
                 Intent.ACTION_USER_PRESENT -> {
+                    IslandStore.locked.value = false
                     val lock = IslandStore.acts.value.find { it.id == "lock" }
                     if (lock != null) IslandStore.upsert(lock.copy(unlocked = true), ttl = 1150)
                     checkShade()
@@ -186,6 +189,7 @@ class IslandAccessibilityService : AccessibilityService() {
         km = getSystemService(KeyguardManager::class.java)
         wm = getSystemService(WindowManager::class.java)
         landscape.value = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        IslandStore.locked.value = km.isKeyguardLocked
         owner.start()
 
         val v = android.widget.FrameLayout(this)
@@ -229,16 +233,7 @@ class IslandAccessibilityService : AccessibilityService() {
         scope.launch {
             while (true) { runCatching { checkCalendar() }; kotlinx.coroutines.delay(30_000) }
         }
-        // Inline reply: the visual window must be focusable for the keyboard, only while typing.
-        scope.launch {
-            IslandStore.replying.collect { r ->
-                vlp.flags = if (r != null) vlp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
-                else vlp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                vlp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
-                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
-                relayout()
-            }
-        }
+        setupTorch()
     }
 
     @androidx.compose.runtime.Composable
@@ -251,14 +246,57 @@ class IslandAccessibilityService : AccessibilityService() {
         val shade by shadeOpen.collectAsState()
         val land by landscape.collectAsState()
         val sx by shift.collectAsState()
-        val hidden = land || (s.hideFullscreen && fs) || (s.hideShade && shade)
+        val replying by IslandStore.replying.collectAsState()
+        val locked by IslandStore.locked.collectAsState()
+        val zones = if (locked) s.deadZonesLock else s.deadZones
+        val hidden = land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null
         val colors = rememberIslandColors(s)
         IslandRoot(
             acts = acts, pick = pick, expandedFlag = expanded, s = s, c = colors, hidden = hidden,
             maxW = LocalConfiguration.current.screenWidthDp.dp,
             shiftX = sx.dp,
+            zones = zones,
             onTouchZone = ::setZone,
         )
+        if (s.showZones) com.louca.island.ui.ZonesOverlay(zones, compactH(s))
+    }
+
+    private var camId: String? = null
+    private var torchMax = 1
+
+    private fun setupTorch() {
+        val cm = getSystemService(android.hardware.camera2.CameraManager::class.java) ?: return
+        camId = runCatching {
+            cm.cameraIdList.firstOrNull {
+                cm.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            }
+        }.getOrNull()
+        val id = camId ?: return
+        torchMax = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 33)
+                cm.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
+            else 1
+        }.getOrDefault(1)
+        IslandStore.torchOff = { runCatching { cm.setTorchMode(id, false) } }
+        IslandStore.torchLevel = { lvl ->
+            runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 33 && torchMax > 1) cm.turnOnTorchWithStrengthLevel(id, lvl.coerceIn(1, torchMax))
+            }
+        }
+        cm.registerTorchCallback(object : android.hardware.camera2.CameraManager.TorchCallback() {
+            override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                if (cameraId != id) return
+                if (enabled) pushTorch(cm, id) else IslandStore.remove("torch")
+            }
+            override fun onTorchStrengthLevelChanged(cameraId: String, newStrengthLevel: Int) {
+                if (cameraId == id && IslandStore.acts.value.any { it.id == "torch" }) pushTorch(cm, id)
+            }
+        }, android.os.Handler(mainLooper))
+    }
+
+    private fun pushTorch(cm: android.hardware.camera2.CameraManager, id: String) {
+        val lvl = runCatching { if (android.os.Build.VERSION.SDK_INT >= 33) cm.getTorchStrengthLevel(id) else 1 }.getOrDefault(1)
+        IslandStore.upsert(Act(id = "torch", kind = Kind.TORCH, title = "Lampe torche", level = lvl, duration = torchMax.toLong()))
     }
 
     private var budsAt = 0L

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -200,6 +201,10 @@ object Demo {
 
     fun multi() { music(); timer(); nav() }
 
+    fun torch() = IslandStore.upsert(
+        Act(id = "torch", kind = Kind.TORCH, pkg = IslandStore.DEMO, title = "Lampe torche", level = 3, duration = 5)
+    )
+
     fun otp() = IslandStore.upsert(
         Act(id = "otp", kind = Kind.OTP, pkg = IslandStore.DEMO, appName = "Messages", title = "Code", short = "482913"),
         ttl = 15_000
@@ -340,6 +345,7 @@ private fun Home() {
                     Chip("Match") { Demo.match() }
                     Chip("Vocal") { Demo.voice() }
                     Chip("Silencieux / NPD") { Demo.system() }
+                    Chip("Lampe") { Demo.torch() }
                     Chip("Code de vérif") { Demo.otp() }
                     Chip("Alarme") { Demo.alarm() }
                     Chip("Rendez-vous") { Demo.event() }
@@ -442,6 +448,8 @@ private fun Home() {
                 FilledTonalButton(onClick = { screen = "apps" }, shape = RoundedCornerShape(20.dp)) { Text("Choisir les apps") }
             }
         }
+
+        item { DeadZonesCard(s) }
 
         item {
             Card("Zone caméra") {
@@ -907,6 +915,76 @@ private fun TermuxGuide(onClose: () -> Unit) {
                     androidx.compose.material3.Button(onClick = onClose, shape = RoundedCornerShape(20.dp)) { Text("Terminer") }
                 }
             }
+        }
+    }
+}
+
+
+// ------------------------------------------------------------------ dead zones
+
+@Composable
+private fun DeadZonesCard(s: Settings) {
+    val cs = MaterialTheme.colorScheme
+    val screenW = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.toFloat()
+    var lock by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val zones = if (lock) s.deadZonesLock else s.deadZones
+    fun set(f: (List<Pair<Float, Float>>) -> List<Pair<Float, Float>>) =
+        Prefs.update { st -> if (lock) st.copy(deadZonesLock = f(st.deadZonesLock)) else st.copy(deadZones = f(st.deadZones)) }
+
+    Card("Zones mortes") {
+        Hint("Zones de la barre d'état où l'île ne doit rien mettre. Les bulles se placent dans l'espace libre (à droite puis à gauche) et la pilule fermée rétrécit si besoin. L'île passe toute seule d'un jeu de zones à l'autre quand tu verrouilles ou déverrouilles.")
+        Spacer(Modifier.height(12.dp))
+        // Home / Lock screen switch
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(cs.surfaceContainerHighest).padding(4.dp),
+        ) {
+            listOf(false to "Écran d'accueil", true to "Écran verrouillé").forEach { (v, label) ->
+                val sel = lock == v
+                val bg by animateColorAsState(if (sel) cs.primary else Color.Transparent, label = "seg")
+                val fg by animateColorAsState(if (sel) cs.onPrimary else cs.onSurface, label = "segf")
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).background(bg)
+                        .semantics { role = Role.RadioButton; contentDescription = label }
+                        .clickable { lock = v }.padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(label, fontSize = 14.sp, color = fg, fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal) }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        // Mini status bar: zones in red, island in the middle
+        BoxWithConstraints(Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(17.dp)).background(cs.surfaceContainerHighest)) {
+            val k = maxWidth.value / screenW
+            zones.forEach { (x, w) ->
+                Box(Modifier.padding(start = (x * k).dp).width((w * k).dp).fillMaxHeight().background(Color(0x66FF3B30)))
+            }
+            Box(
+                Modifier.align(Alignment.Center).width((96 * k).dp).height(16.dp)
+                    .clip(RoundedCornerShape(8.dp)).background(cs.onSurface)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Toggle("Afficher les zones à l'écran", "Cadres rouges sur la vraie barre d'état pour les caler pile sur les icônes.", s.showZones) { v ->
+            Prefs.update { it.copy(showZones = v) }
+        }
+        zones.forEachIndexed { i, (x, w) ->
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Zone ${i + 1}", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = cs.onSurface, modifier = Modifier.weight(1f))
+                TextButton(onClick = { set { l -> l.filterIndexed { j, _ -> j != i } } }) { Text("Supprimer") }
+            }
+            Label("Début", "%.0f dp".format(x))
+            Slider(x, { v -> set { l -> l.mapIndexed { j, z -> if (j == i) v to z.second else z } } }, valueRange = 0f..screenW)
+            Label("Largeur", "%.0f dp".format(w))
+            Slider(w, { v -> set { l -> l.mapIndexed { j, z -> if (j == i) z.first to v else z } } }, valueRange = 8f..(screenW / 2))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(onClick = { set { it + ((screenW - 120f) to 100f) } }, shape = RoundedCornerShape(20.dp)) { Text("Ajouter") }
+            FilledTonalButton(onClick = {
+                // Lock screen: the operator / SIM name takes the left side, so block it wider.
+                set { if (lock) listOf(8f to 150f, (screenW - 122f) to 114f) else listOf(8f to 64f, (screenW - 122f) to 114f) }
+                Prefs.update { it.copy(showZones = true) }
+            }, shape = RoundedCornerShape(20.dp)) { Text("Zones conseillées") }
         }
     }
 }

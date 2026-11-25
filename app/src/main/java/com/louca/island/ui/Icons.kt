@@ -551,3 +551,52 @@ fun LyricsIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         drawLine(color, Offset(w * .28f, w * .5f), Offset(w * .56f, w * .5f), w * .08f, StrokeCap.Round)
     }
 }
+
+/** Screen recording: a phone screen outline with a pulsing record dot inside. */
+@Composable
+fun ScreenRecIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val inf = rememberInfiniteTransition(label = "sr")
+    val a by inf.animateFloat(1f, .45f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "a")
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        drawRoundRect(color, Offset(w * .26f, w * .08f), Size(w * .48f, w * .84f), CornerRadius(w * .12f), style = Stroke(w * .085f))
+        drawLine(color, Offset(w * .44f, w * .17f), Offset(w * .56f, w * .17f), w * .06f, StrokeCap.Round)
+        drawCircle(color.copy(alpha = a), w * .13f, Offset(w / 2, w * .52f))
+    }
+}
+
+/** Flashlight; [on] adds a soft animated beam. */
+@Composable
+fun FlashIcon(color: Color, size: Dp, on: Boolean = false, modifier: Modifier = Modifier) {
+    val inf = rememberInfiniteTransition(label = "fl")
+    val g by inf.animateFloat(.55f, 1f, infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g")
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        val head = Path().apply {
+            moveTo(w * .3f, w * .3f); lineTo(w * .7f, w * .3f); lineTo(w * .62f, w * .46f); lineTo(w * .38f, w * .46f); close()
+        }
+        drawPath(head, color)
+        drawRoundRect(color, Offset(w * .39f, w * .48f), Size(w * .22f, w * .44f), CornerRadius(w * .06f))
+        if (on) {
+            val st = w * .07f
+            val c = color.copy(alpha = g)
+            drawLine(c, Offset(w * .5f, w * .2f), Offset(w * .5f, w * .06f), st, StrokeCap.Round)
+            drawLine(c, Offset(w * .3f, w * .22f), Offset(w * .2f, w * .1f), st, StrokeCap.Round)
+            drawLine(c, Offset(w * .7f, w * .22f), Offset(w * .8f, w * .1f), st, StrokeCap.Round)
+        }
+    }
+}
+
+@Composable
+fun TrashIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val w = this.size.width
+        val st = Stroke(w * .09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        drawLine(color, Offset(w * .16f, w * .26f), Offset(w * .84f, w * .26f), w * .09f, StrokeCap.Round)
+        drawLine(color, Offset(w * .4f, w * .14f), Offset(w * .6f, w * .14f), w * .09f, StrokeCap.Round)
+        val body = Path().apply {
+            moveTo(w * .24f, w * .32f); lineTo(w * .3f, w * .86f); lineTo(w * .7f, w * .86f); lineTo(w * .76f, w * .32f)
+        }
+        drawPath(body, color, style = st)
+    }
+}
