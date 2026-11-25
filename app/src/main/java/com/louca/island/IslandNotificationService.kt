@@ -55,6 +55,45 @@ class IslandNotificationService : NotificationListenerService() {
         onSessions(list ?: emptyList())
     }
 
+    override fun onCreate() { super.onCreate(); instance = this }
+    override fun onDestroy() { if (instance === this) instance = null; super.onDestroy() }
+
+    /** Human-readable dump of ongoing notifications (timers, recorders, live updates) for the Diagnostic page. */
+    fun dumpOngoing(all: Boolean): String {
+        val now = System.currentTimeMillis()
+        val sb = StringBuilder()
+        val list = runCatching { activeNotifications?.toList() }.getOrNull() ?: return "Accès aux notifications indisponible."
+        list.filter { all || it.isOngoing }.forEach { sbn ->
+            val n = sbn.notification; val ex = n.extras
+            sb.append("■ ").append(sbn.packageName).append("  id=").append(sbn.id).append('\n')
+            sb.append("  catégorie=").append(n.category).append("  canal=").append(n.channelId).append("  ongoing=").append(sbn.isOngoing).append('\n')
+            sb.append("  modèle=").append(ex.getString(Notification.EXTRA_TEMPLATE)?.substringAfterLast('$')).append('\n')
+            sb.append("  titre=").append(ex.getCharSequence(Notification.EXTRA_TITLE)).append('\n')
+            sb.append("  texte=").append(ex.getCharSequence(Notification.EXTRA_TEXT)).append('\n')
+            ex.getCharSequence(Notification.EXTRA_SUB_TEXT)?.let { sb.append("  sous-texte=").append(it).append('\n') }
+            sb.append("  chrono=").append(ex.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
+                .append("  rebours=").append(ex.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN))
+                .append("  when=").append((n.`when` - now) / 1000).append("s").append('\n')
+            val pm = ex.getInt(Notification.EXTRA_PROGRESS_MAX)
+            if (pm > 0) sb.append("  progression=").append(ex.getInt(Notification.EXTRA_PROGRESS)).append('/').append(pm).append('\n')
+            sb.append("  boutons=").append(n.actions?.joinToString(" | ") { it.title.toString() } ?: "aucun").append('\n')
+            @Suppress("DEPRECATION")
+            sb.append("  vue perso=").append(n.contentView != null).append("/").append(n.bigContentView != null)
+            findChrono(n)?.let { cv ->
+                sb.append("  chronomètre trouvé: base=").append((cv.base - SystemClock.elapsedRealtime()) / 1000).append("s rebours=")
+                    .append(cv.isCountDown).append(" texte=").append(cv.text)
+            }
+            sb.append('\n')
+            IslandStore.acts.value.find { it.key == sbn.key }?.let { a ->
+                sb.append("  → Island: ").append(a.kind).append(" chrono=").append(a.chrono).append(" rebours=").append(a.countDown)
+                    .append(" base=").append((a.base - now) / 1000).append("s texte=").append(a.timeText)
+                    .append(" durée=").append(a.duration / 1000).append("s").append('\n')
+            } ?: sb.append("  → Island: non affichée").append('\n')
+            sb.append('\n')
+        }
+        return sb.toString().ifBlank { if (all) "Aucune notification." else "Aucune notification en cours. Lance un minuteur puis actualise." }
+    }
+
     override fun onListenerConnected() {
         IslandStore.cancelNotif = { k -> runCatching { cancelNotification(k) } }
         msm = getSystemService(MediaSessionManager::class.java)
@@ -376,7 +415,7 @@ class IslandNotificationService : NotificationListenerService() {
                         actions = allBtns, contentIntent = n.contentIntent,
                         stamp = System.currentTimeMillis(),
                     ),
-                    ttl = 5200
+                    ttl = 6000
                 )
             }
         }
@@ -477,6 +516,8 @@ class IslandNotificationService : NotificationListenerService() {
     }
 
     companion object {
+        @Volatile var instance: IslandNotificationService? = null
+
         fun accentOf(b: Bitmap?): Int {
             if (b == null) return 0
             return runCatching {

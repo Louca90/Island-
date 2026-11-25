@@ -50,6 +50,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -327,6 +328,286 @@ private fun Home() {
         }
     }
 
+    val pages = listOf(
+        PageDef("perm", "Autorisations", "Accessibilité, notifications, batterie", "autorisation accessibilite notification batterie restreint permission", Color(0xFF3E91FF)),
+        PageDef("demo", "Tester les animations", "Lance chaque état de l'île", "demo test animation musique notification chrono minuteur appel lampe code alarme rendez-vous ecouteurs", Color(0xFFFF9F0A)),
+        PageDef("look", "Apparence", "Couleur, hauteur, largeur, position", "theme couleur noir graphite clair taille hauteur largeur position apparence", Color(0xFFBF5AF2)),
+        PageDef("zones", "Caméra & zones mortes", "Repère caméra, zones à éviter, bulles", "zone morte camera repere trou bulle verrouille accueil sim operateur masque", Color(0xFFFF453A)),
+        PageDef("notif", "Notifications & pop-ups", "Pop-ups Samsung, apps masquées", "pop-up popup bandeau samsung termux adb masquer app filtre bloquer notification", Color(0xFF30D158)),
+        PageDef("live", "Activités & intégrations", "Itinéraire, sport, alarme, agenda, écouteurs, paroles", "itineraire maps waze livraison sport live alarme agenda calendrier ecouteurs buds bluetooth paroles lyrics code verification otp systeme silencieux", Color(0xFF64D2FF)),
+        PageDef("standby", "Mode veille en charge", "Écran musique en paysage", "veille charge standby paysage paroles horloge grand format", Color(0xFF5E5CE6)),
+        PageDef("behav", "Comportement", "Plein écran, volet, verrouillage, repos", "comportement plein ecran volet verrouillage cadenas repos pilule apercu", Color(0xFF8E8E93)),
+        PageDef("update", "Mises à jour & sauvegarde", "GitHub, exporter, importer", "mise a jour update github version sauvegarde export import reglages", Color(0xFF32ADE6)),
+        PageDef("help", "Aide", "QuickStar, guide Termux", "aide tuto quickstar good lock termux guide icones barre", Color(0xFFFFD60A)),
+        PageDef("diag", "Diagnostic", "Ce que les apps envoient (minuteur…)", "diagnostic debug bug minuteur timer chrono notification envoie", Color(0xFFAC8E68)),
+    )
+    var query by remember { androidx.compose.runtime.mutableStateOf("") }
+    androidx.activity.compose.BackHandler(enabled = screen != "home") { screen = "home" }
+    if (screen != "home") {
+        val def = pages.firstOrNull { it.key == screen }
+        if (def != null) {
+            SubPage(def.title, bars, onBack = { screen = "home" }) {
+            when (screen) {
+                "perm" -> {
+                item {
+                    Card("Autorisations") {
+                        Step(
+                            "1. Paramètres restreints",
+                            "App installée hors Play Store : Infos de l'app › ⋮ › Autoriser les paramètres restreints (à faire avant l'étape 2).",
+                            a11y, "Infos de l'app"
+                        ) {
+                            ctx.startActivity(Intent(SysSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")))
+                        }
+                        Step("2. Accessibilité", "Applications installées › Island › Activer. Sert à dessiner l'île sur la barre d'état.", a11y, "Ouvrir") {
+                            ctx.startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                        Step("3. Accès aux notifications", "Pour la musique, les notifs, le chrono, l'enregistreur et les appels.", listener, "Ouvrir") {
+                            ctx.startActivity(Intent(SysSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        }
+                        Step("4. Batterie", "Évite que One UI coupe l'île en arrière-plan.", battery, "Autoriser") {
+                            runCatching {
+                                ctx.startActivity(Intent(SysSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}")))
+                            }
+                        }
+                    }
+                }
+                }
+                "demo" -> {
+                item {
+                    Card("Tester les animations") {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("Musique") { Demo.music() }
+                            Chip("Notification") { Demo.notif() }
+                            Chip("3 notifs (pile)") { Demo.inbox() }
+                            Chip("Chrono") { Demo.timer() }
+                            Chip("Minuteur") { Demo.countdown() }
+                            Chip("Enregistrement") { Demo.rec() }
+                            Chip("Appel") { Demo.call() }
+                            Chip("Charge") { Demo.charge() }
+                            Chip("Déverrouillage") { Demo.lock() }
+                            Chip("Itinéraire") { Demo.nav() }
+                            Chip("Livraison") { Demo.delivery() }
+                            Chip("Match") { Demo.match() }
+                            Chip("Vocal") { Demo.voice() }
+                            Chip("Silencieux / NPD") { Demo.system() }
+                            Chip("Lampe") { Demo.torch() }
+                            Chip("Code de vérif") { Demo.otp() }
+                            Chip("Alarme") { Demo.alarm() }
+                            Chip("Rendez-vous") { Demo.event() }
+                            Chip("Écouteurs") { Demo.buds() }
+                            Chip("Multi (bulles)") { Demo.multi() }
+                            Chip("Tout effacer") { IslandStore.clear() }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Hint("Tap : étendre · Appui long : ouvrir l'app · Glisser ← → : changer d'activité · Glisser ↑ : replier · Tap sur une bulle : la mettre devant.")
+                    }
+                }
+                }
+                "look" -> {
+                item { AppearanceCard(s) }
+                }
+                "zones" -> {
+                item {
+                    Card("Zone caméra") {
+                        Toggle("Protéger la zone caméra", "Aucun texte ni bouton sous le trou de la caméra, en compact comme en étendu.", s.camMask) { v -> Prefs.update { it.copy(camMask = v) } }
+                        Toggle("Afficher le repère", "Dessine un cercle à l'emplacement de la caméra pour régler la taille et la position.", s.camGuide) { v -> Prefs.update { it.copy(camGuide = v) } }
+                        Label("Taille de la zone", "%.0f dp".format(s.camSize))
+                        Slider(s.camSize, { v -> Prefs.update { it.copy(camSize = v) } }, valueRange = 12f..34f, steps = 21)
+                    }
+                }
+                item { DeadZonesCard(s) }
+                }
+                "notif" -> {
+                item {
+                    val secOk = remember(tick) { ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED }
+                    var popOff by remember(tick) {
+                        androidx.compose.runtime.mutableStateOf(
+                            SysSettings.Global.getInt(ctx.contentResolver, "heads_up_notifications_enabled", 1) == 0
+                        )
+                    }
+                    Card("Pop-ups Samsung") {
+                        if (secOk) {
+                            Toggle("Désactiver les pop-ups", "Plus aucune bannière Samsung en haut de l'écran : l'île les remplace. Sons et volet inchangés.", popOff) { v ->
+                                runCatching { SysSettings.Global.putInt(ctx.contentResolver, "heads_up_notifications_enabled", if (v) 0 else 1) }
+                                    .onSuccess { popOff = v }
+                            }
+                            if (popOff) {
+                                Spacer(Modifier.height(6.dp))
+                                Step(
+                                    "Indispensable : style « Détaillé »",
+                                    "One UI ignore ce réglage pour ses pop-ups au style « Bref » (la petite pilule). Va dans Notifications › Style des notifications pop-up et choisis « Détaillé » : plus aucun bandeau, seulement l'île.",
+                                    false, "Ouvrir",
+                                ) {
+                                    runCatching {
+                                        ctx.startActivity(Intent("android.settings.NOTIFICATION_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                    }.onFailure { ctx.startActivity(Intent(SysSettings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                }
+                            }
+                        } else {
+                            Hint("Android exige une autorisation donnée une seule fois par ADB. Dans Termux, une fois connecté (adb connect), lance cette commande :")
+                            Spacer(Modifier.height(8.dp))
+                            val cmd = "adb shell pm grant ${ctx.packageName} android.permission.WRITE_SECURE_SETTINGS"
+                            Text(cmd, fontSize = 13.sp, color = cs.onSurface, modifier = Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainerHighest).padding(12.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilledTonalButton(onClick = {
+                                    ctx.getSystemService(android.content.ClipboardManager::class.java)
+                                        .setPrimaryClip(android.content.ClipData.newPlainText("adb", cmd))
+                                }, shape = RoundedCornerShape(20.dp)) { Text("Copier") }
+                                FilledTonalButton(onClick = {
+                                    ctx.packageManager.getLaunchIntentForPackage("com.termux")?.let { ctx.startActivity(it) }
+                                }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir Termux") }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Hint("Reviens ensuite ici : l'interrupteur apparaît tout seul.")
+                            TextButton(onClick = { guide = true }) { Text("Guide détaillé pas à pas") }
+                        }
+                    }
+                }
+                item {
+                    Card("Apps masquées") {
+                        Hint(if (s.blocked.isEmpty()) "Aucune app masquée." else "${s.blocked.size} app(s) n'apparaissent jamais dans l'île.")
+                        Spacer(Modifier.height(8.dp))
+                        FilledTonalButton(onClick = { screen = "apps" }, shape = RoundedCornerShape(20.dp)) { Text("Choisir les apps") }
+                    }
+                }
+                }
+                "live" -> {
+                item {
+                    Card("Intégrations") {
+                        Toggle("Itinéraires", "Google Maps, Waze… : prochaine direction et distance.", s.showNav) { v -> Prefs.update { it.copy(showNav = v) } }
+                        Toggle("Activités en direct", "Live Updates Android : livraisons, VTC, téléchargements, Quick Share, scores sportifs.", s.showLive) { v -> Prefs.update { it.copy(showLive = v) } }
+                        Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
+                        Hint("Toujours actifs : musique, chrono et minuteur, dictaphone, enregistreur d'écran, entraînements (Samsung Health…), appels, charge, déverrouillage.")
+                    }
+                }
+                item {
+                    Card("Nouveautés") {
+                        Toggle("Codes de vérification", "Le code s'affiche dans l'île, un tap le copie.", s.showOtp) { v -> Prefs.update { it.copy(showOtp = v) } }
+                        Toggle("Alarme", "Répéter / Arrêter directement dans l'île.", s.showAlarm) { v -> Prefs.update { it.copy(showAlarm = v) } }
+                        Toggle("Prochain rendez-vous", "Depuis ton agenda, avant le début.", s.showEvents) { v -> Prefs.update { it.copy(showEvents = v) } }
+                        if (s.showEvents) {
+                            Label("Afficher avant", "%.0f min".format(s.eventLead))
+                            Slider(s.eventLead, { v -> Prefs.update { it.copy(eventLead = v) } }, valueRange = 5f..60f, steps = 10)
+                            if (!calOk) Step("Accès à l'agenda", "Nécessaire pour lire tes événements.", false, "Autoriser") {
+                                permLauncher.launch(arrayOf(android.Manifest.permission.READ_CALENDAR))
+                            }
+                        }
+                        Toggle("Écouteurs Bluetooth", "Connexion et batterie des Buds et casques.", s.showBuds) { v -> Prefs.update { it.copy(showBuds = v) } }
+                        if (s.showBuds && !btOk) Step("Accès Bluetooth", "Pour voir le nom et la batterie des écouteurs.", false, "Autoriser") {
+                            permLauncher.launch(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT))
+                        }
+                        Toggle("Paroles synchronisées", "Dans le lecteur étendu, via LRCLIB (gratuit). Nécessite Internet.", s.showLyrics) { v ->
+                            Prefs.update { it.copy(showLyrics = v) }; if (!v) IslandStore.lyrics.value = null
+                        }
+                    }
+                }
+                }
+                "standby" -> {
+                item {
+                    Card("Mode veille en charge") {
+                        Toggle("Ouvrir en charge", "Quand tu branches le téléphone : écran musique en paysage, toujours allumé, même verrouillé. Pochette et contrôles à gauche, paroles à droite, grande horloge s'il n'y a pas de musique. Se ferme quand tu débranches ou d'un double tap.", s.standbyOnCharge) { v ->
+                            Prefs.update { it.copy(standbyOnCharge = v) }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        FilledTonalButton(onClick = { IslandStore.openStandby() }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir maintenant") }
+                    }
+                }
+                }
+                "behav" -> {
+                item {
+                    Card("Comportement") {
+                        Toggle("Pilule au repos", "Garde une petite pilule autour de la caméra quand rien n'est actif.", s.showIdle) { v -> Prefs.update { it.copy(showIdle = v) } }
+                        Toggle("Cadenas sur l'écran verrouillé", "Le cadenas s'ouvre en animation au déverrouillage.", s.lockAnim) { v -> Prefs.update { it.copy(lockAnim = v) } }
+                        Toggle("Aperçu des notifications", "Les nouvelles notifs se déroulent depuis la caméra.", s.peekNotifs) { v -> Prefs.update { it.copy(peekNotifs = v) } }
+                        Toggle("Masquer en plein écran", "Vidéos, jeux : l'île disparaît avec la barre d'état.", s.hideFullscreen) { v -> Prefs.update { it.copy(hideFullscreen = v) } }
+                        Toggle("Masquer avec le volet ouvert", "L'île s'efface quand tu descends le panneau rapide.", s.hideShade) { v -> Prefs.update { it.copy(hideShade = v) } }
+                    }
+                }
+                }
+                "update" -> {
+                item {
+                    Card("Mises à jour & sauvegarde") {
+                        Hint("Dépôt GitHub public où tu publies les APK en release (ex. louca/island). L'app télécharge la dernière et lance l'installation.")
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = s.updateRepo, onValueChange = { v -> Prefs.update { it.copy(updateRepo = v.trim()) } },
+                            label = { Text("propriétaire/dépôt") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            FilledTonalButton(onClick = {
+                                updMsg = "Recherche…"
+                                scope.launch { updMsg = Updater.check(ctx, s.updateRepo) }
+                            }, shape = RoundedCornerShape(20.dp), enabled = s.updateRepo.contains("/")) { Text("Vérifier") }
+                            Spacer(Modifier.width(12.dp))
+                            Text(updMsg, fontSize = 13.sp, color = cs.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = { exportL.launch("island-reglages.json") }, shape = RoundedCornerShape(20.dp)) { Text("Exporter") }
+                            FilledTonalButton(onClick = { importL.launch(arrayOf("application/json", "*/*")) }, shape = RoundedCornerShape(20.dp)) { Text("Importer") }
+                        }
+                    }
+                }
+                }
+                "help" -> {
+                item {
+                    Card("Tuto QuickStar : barre d'état propre") {
+                        TutoStep(1, "Ouvre Good Lock, puis le module QuickStar.")
+                        TutoStep(2, "Va dans les icônes de la barre d'état et décoche tout sauf l'heure et la batterie (Wi-Fi, réseau, alarme, NFC, etc.).")
+                        TutoStep(3, "Dans QuickStar, désactive l'affichage de la Now Bar / des notifications en direct dans la barre d'état (nouvelle option One UI 9). Elles restent sur l'écran verrouillé et dans le volet.")
+                        TutoStep(4, "Icônes de notifications à gauche de l'heure : ça ne se règle pas dans QuickStar. Va dans Paramètres › Notifications › Paramètres avancés › Afficher les icônes de notification, et choisis Aucune.")
+                        TutoStep(5, "Si des icônes réagissent au mauvais interrupteur : c'est un bug connu de QuickStar sous One UI 9. Mets à jour le module depuis Good Lock.")
+                        TutoStep(6, "Optionnel : Paramètres › Notifications › Notifications en direct, désactive-les pour Horloge et l'enregistreur pour éviter les doublons.")
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(onClick = {
+                            val i = ctx.packageManager.getLaunchIntentForPackage("com.samsung.android.goodlock")
+                            if (i != null) ctx.startActivity(i)
+                        }) { Text("Ouvrir Good Lock") }
+                    }
+                }
+                item {
+                    Card("Guide Termux (pop-ups Samsung)") {
+                        Hint("Pas à pas pour donner à Island l'autorisation de couper les pop-ups, depuis ton téléphone.")
+                        Spacer(Modifier.height(8.dp))
+                        FilledTonalButton(onClick = { guide = true }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir le guide") }
+                    }
+                }
+                }
+                "diag" -> {
+                item {
+                    var all by remember { androidx.compose.runtime.mutableStateOf(false) }
+                    var dump by remember { androidx.compose.runtime.mutableStateOf("") }
+                    var copied by remember { androidx.compose.runtime.mutableStateOf(false) }
+                    fun refresh() { dump = IslandNotificationService.instance?.dumpOngoing(all) ?: "Accès aux notifications désactivé (voir Autorisations)."; copied = false }
+                    LaunchedEffect(all) { refresh() }
+                    Card("Diagnostic des notifications") {
+                        Hint("Pour le minuteur : lance un minuteur dans Samsung Horloge, reviens ici, appuie sur Actualiser puis Copier, et colle le résultat à Claude. On voit exactement ce que l'app envoie et ce qu'Island en a compris.")
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = { refresh() }, shape = RoundedCornerShape(20.dp)) { Text("Actualiser") }
+                            FilledTonalButton(onClick = {
+                                ctx.getSystemService(android.content.ClipboardManager::class.java)
+                                    .setPrimaryClip(android.content.ClipData.newPlainText("diagnostic", dump)); copied = true
+                            }, shape = RoundedCornerShape(20.dp)) { Text(if (copied) "Copié" else "Copier") }
+                        }
+                        Toggle("Toutes les notifications", "Par défaut seules celles « en cours » (minuteur, chrono, enregistrement…).", all) { v -> all = v }
+                        Text(
+                            dump, fontSize = 12.sp, lineHeight = 16.sp, color = cs.onSurface,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(cs.surfaceContainerHighest).padding(12.dp),
+                        )
+                    }
+                }
+                }
+            }
+            }
+            return
+        }
+    }
+
     LazyColumn(
         Modifier.fillMaxSize().background(cs.surface),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = bars.calculateTopPadding(), bottom = bars.calculateBottomPadding() + 24.dp),
@@ -350,217 +631,46 @@ private fun Home() {
 
         item { PreviewCard() }
 
-        item {
-            Card("Tester les animations") {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Musique") { Demo.music() }
-                    Chip("Notification") { Demo.notif() }
-                    Chip("3 notifs (pile)") { Demo.inbox() }
-                    Chip("Chrono") { Demo.timer() }
-                    Chip("Minuteur") { Demo.countdown() }
-                    Chip("Enregistrement") { Demo.rec() }
-                    Chip("Appel") { Demo.call() }
-                    Chip("Charge") { Demo.charge() }
-                    Chip("Déverrouillage") { Demo.lock() }
-                    Chip("Itinéraire") { Demo.nav() }
-                    Chip("Livraison") { Demo.delivery() }
-                    Chip("Match") { Demo.match() }
-                    Chip("Vocal") { Demo.voice() }
-                    Chip("Silencieux / NPD") { Demo.system() }
-                    Chip("Lampe") { Demo.torch() }
-                    Chip("Code de vérif") { Demo.otp() }
-                    Chip("Alarme") { Demo.alarm() }
-                    Chip("Rendez-vous") { Demo.event() }
-                    Chip("Écouteurs") { Demo.buds() }
-                    Chip("Multi (bulles)") { Demo.multi() }
-                    Chip("Tout effacer") { IslandStore.clear() }
+        if (!ready) item {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(cs.errorContainer)
+                    .clickable { screen = "perm" }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Autorisations manquantes", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = cs.onErrorContainer)
+                    Text("L'île ne peut pas s'afficher sans elles.", fontSize = 13.sp, color = cs.onErrorContainer)
                 }
-                Spacer(Modifier.height(10.dp))
-                Hint("Tap : étendre · Appui long : ouvrir l'app · Glisser ← → : changer d'activité · Glisser ↑ : replier · Tap sur une bulle : la mettre devant.")
+                Text("Régler ›", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onErrorContainer)
             }
         }
 
         item {
-            Card("Autorisations") {
-                Step(
-                    "1. Paramètres restreints",
-                    "App installée hors Play Store : Infos de l'app › ⋮ › Autoriser les paramètres restreints (à faire avant l'étape 2).",
-                    a11y, "Infos de l'app"
-                ) {
-                    ctx.startActivity(Intent(SysSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")))
-                }
-                Step("2. Accessibilité", "Applications installées › Island › Activer. Sert à dessiner l'île sur la barre d'état.", a11y, "Ouvrir") {
-                    ctx.startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
-                Step("3. Accès aux notifications", "Pour la musique, les notifs, le chrono, l'enregistreur et les appels.", listener, "Ouvrir") {
-                    ctx.startActivity(Intent(SysSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                }
-                Step("4. Batterie", "Évite que One UI coupe l'île en arrière-plan.", battery, "Autoriser") {
-                    runCatching {
-                        ctx.startActivity(Intent(SysSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}")))
+            androidx.compose.material3.OutlinedTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                placeholder = { Text("Rechercher un réglage (zone, paroles, pop-up…)") },
+                shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        val q = norm(query)
+        val shown = if (q.isBlank()) pages else pages.filter { norm(it.title + " " + it.subtitle + " " + it.keywords).contains(q) }
+        if (q.isNotBlank() && shown.isEmpty()) item { Hint("Aucun réglage ne correspond à « $query ».") }
+        val groups = if (q.isNotBlank()) listOf("" to shown) else listOf(
+            "Essentiel" to shown.filter { it.key in setOf("perm", "demo", "look", "zones", "notif") },
+            "Plus" to shown.filter { it.key !in setOf("perm", "demo", "look", "zones", "notif") },
+        )
+        groups.forEach { (label, list) ->
+            if (list.isEmpty()) return@forEach
+            item {
+                if (label.isNotEmpty()) Text(label, fontSize = 13.sp, color = cs.primary, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 12.dp, bottom = 6.dp))
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(cs.surfaceContainerLow)) {
+                    list.forEachIndexed { i, pg ->
+                        CategoryRow(pg) { screen = pg.key; query = "" }
+                        if (i < list.lastIndex) Box(Modifier.padding(start = 70.dp, end = 18.dp).fillMaxWidth().height(1.dp).background(cs.outlineVariant.copy(alpha = .4f)))
                     }
                 }
-            }
-        }
-
-        item { AppearanceCard(s) }
-
-        item {
-            Card("Nouveautés") {
-                Toggle("Codes de vérification", "Le code s'affiche dans l'île, un tap le copie.", s.showOtp) { v -> Prefs.update { it.copy(showOtp = v) } }
-                Toggle("Alarme", "Répéter / Arrêter directement dans l'île.", s.showAlarm) { v -> Prefs.update { it.copy(showAlarm = v) } }
-                Toggle("Prochain rendez-vous", "Depuis ton agenda, avant le début.", s.showEvents) { v -> Prefs.update { it.copy(showEvents = v) } }
-                if (s.showEvents) {
-                    Label("Afficher avant", "%.0f min".format(s.eventLead))
-                    Slider(s.eventLead, { v -> Prefs.update { it.copy(eventLead = v) } }, valueRange = 5f..60f, steps = 10)
-                    if (!calOk) Step("Accès à l'agenda", "Nécessaire pour lire tes événements.", false, "Autoriser") {
-                        permLauncher.launch(arrayOf(android.Manifest.permission.READ_CALENDAR))
-                    }
-                }
-                Toggle("Écouteurs Bluetooth", "Connexion et batterie des Buds et casques.", s.showBuds) { v -> Prefs.update { it.copy(showBuds = v) } }
-                if (s.showBuds && !btOk) Step("Accès Bluetooth", "Pour voir le nom et la batterie des écouteurs.", false, "Autoriser") {
-                    permLauncher.launch(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT))
-                }
-                Toggle("Paroles synchronisées", "Dans le lecteur étendu, via LRCLIB (gratuit). Nécessite Internet.", s.showLyrics) { v ->
-                    Prefs.update { it.copy(showLyrics = v) }; if (!v) IslandStore.lyrics.value = null
-                }
-            }
-        }
-
-        item {
-            val secOk = remember(tick) { ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED }
-            var popOff by remember(tick) {
-                androidx.compose.runtime.mutableStateOf(
-                    SysSettings.Global.getInt(ctx.contentResolver, "heads_up_notifications_enabled", 1) == 0
-                )
-            }
-            Card("Pop-ups Samsung") {
-                if (secOk) {
-                    Toggle("Désactiver les pop-ups", "Plus aucune bannière Samsung en haut de l'écran : l'île les remplace. Sons et volet inchangés.", popOff) { v ->
-                        runCatching { SysSettings.Global.putInt(ctx.contentResolver, "heads_up_notifications_enabled", if (v) 0 else 1) }
-                            .onSuccess { popOff = v }
-                    }
-                    if (popOff) {
-                        Spacer(Modifier.height(6.dp))
-                        Step(
-                            "Indispensable : style « Détaillé »",
-                            "One UI ignore ce réglage pour ses pop-ups au style « Bref » (la petite pilule). Va dans Notifications › Style des notifications pop-up et choisis « Détaillé » : plus aucun bandeau, seulement l'île.",
-                            false, "Ouvrir",
-                        ) {
-                            runCatching {
-                                ctx.startActivity(Intent("android.settings.NOTIFICATION_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            }.onFailure { ctx.startActivity(Intent(SysSettings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        }
-                    }
-                } else {
-                    Hint("Android exige une autorisation donnée une seule fois par ADB. Dans Termux, une fois connecté (adb connect), lance cette commande :")
-                    Spacer(Modifier.height(8.dp))
-                    val cmd = "adb shell pm grant ${ctx.packageName} android.permission.WRITE_SECURE_SETTINGS"
-                    Text(cmd, fontSize = 13.sp, color = cs.onSurface, modifier = Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp)).background(cs.surfaceContainerHighest).padding(12.dp))
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = {
-                            ctx.getSystemService(android.content.ClipboardManager::class.java)
-                                .setPrimaryClip(android.content.ClipData.newPlainText("adb", cmd))
-                        }, shape = RoundedCornerShape(20.dp)) { Text("Copier") }
-                        FilledTonalButton(onClick = {
-                            ctx.packageManager.getLaunchIntentForPackage("com.termux")?.let { ctx.startActivity(it) }
-                        }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir Termux") }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Hint("Reviens ensuite ici : l'interrupteur apparaît tout seul.")
-                    TextButton(onClick = { guide = true }) { Text("Guide détaillé pas à pas") }
-                }
-            }
-        }
-
-        item {
-            Card("Apps masquées") {
-                Hint(if (s.blocked.isEmpty()) "Aucune app masquée." else "${s.blocked.size} app(s) n'apparaissent jamais dans l'île.")
-                Spacer(Modifier.height(8.dp))
-                FilledTonalButton(onClick = { screen = "apps" }, shape = RoundedCornerShape(20.dp)) { Text("Choisir les apps") }
-            }
-        }
-
-        item {
-            Card("Mode veille en charge") {
-                Toggle("Ouvrir en charge", "Quand tu branches le téléphone : écran musique en paysage, toujours allumé, même verrouillé. Pochette et contrôles à gauche, paroles à droite, grande horloge s'il n'y a pas de musique. Se ferme quand tu débranches ou d'un double tap.", s.standbyOnCharge) { v ->
-                    Prefs.update { it.copy(standbyOnCharge = v) }
-                }
-                Spacer(Modifier.height(6.dp))
-                FilledTonalButton(onClick = { IslandStore.openStandby() }, shape = RoundedCornerShape(20.dp)) { Text("Ouvrir maintenant") }
-            }
-        }
-
-        item { DeadZonesCard(s) }
-
-        item {
-            Card("Zone caméra") {
-                Toggle("Protéger la zone caméra", "Aucun texte ni bouton sous le trou de la caméra, en compact comme en étendu.", s.camMask) { v -> Prefs.update { it.copy(camMask = v) } }
-                Toggle("Afficher le repère", "Dessine un cercle à l'emplacement de la caméra pour régler la taille et la position.", s.camGuide) { v -> Prefs.update { it.copy(camGuide = v) } }
-                Label("Taille de la zone", "%.0f dp".format(s.camSize))
-                Slider(s.camSize, { v -> Prefs.update { it.copy(camSize = v) } }, valueRange = 12f..34f, steps = 21)
-            }
-        }
-
-        item {
-            Card("Intégrations") {
-                Toggle("Itinéraires", "Google Maps, Waze… : prochaine direction et distance.", s.showNav) { v -> Prefs.update { it.copy(showNav = v) } }
-                Toggle("Activités en direct", "Live Updates Android : livraisons, VTC, téléchargements, Quick Share, scores sportifs.", s.showLive) { v -> Prefs.update { it.copy(showLive = v) } }
-                Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
-                Hint("Toujours actifs : musique, chrono et minuteur, dictaphone, enregistreur d'écran, entraînements (Samsung Health…), appels, charge, déverrouillage.")
-            }
-        }
-
-        item {
-            Card("Comportement") {
-                Toggle("Pilule au repos", "Garde une petite pilule autour de la caméra quand rien n'est actif.", s.showIdle) { v -> Prefs.update { it.copy(showIdle = v) } }
-                Toggle("Cadenas sur l'écran verrouillé", "Le cadenas s'ouvre en animation au déverrouillage.", s.lockAnim) { v -> Prefs.update { it.copy(lockAnim = v) } }
-                Toggle("Aperçu des notifications", "Les nouvelles notifs se déroulent depuis la caméra.", s.peekNotifs) { v -> Prefs.update { it.copy(peekNotifs = v) } }
-                Toggle("Masquer en plein écran", "Vidéos, jeux : l'île disparaît avec la barre d'état.", s.hideFullscreen) { v -> Prefs.update { it.copy(hideFullscreen = v) } }
-                Toggle("Masquer avec le volet ouvert", "L'île s'efface quand tu descends le panneau rapide.", s.hideShade) { v -> Prefs.update { it.copy(hideShade = v) } }
-            }
-        }
-
-        item {
-            Card("Mises à jour & sauvegarde") {
-                Hint("Dépôt GitHub public où tu publies les APK en release (ex. louca/island). L'app télécharge la dernière et lance l'installation.")
-                Spacer(Modifier.height(8.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = s.updateRepo, onValueChange = { v -> Prefs.update { it.copy(updateRepo = v.trim()) } },
-                    label = { Text("propriétaire/dépôt") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FilledTonalButton(onClick = {
-                        updMsg = "Recherche…"
-                        scope.launch { updMsg = Updater.check(ctx, s.updateRepo) }
-                    }, shape = RoundedCornerShape(20.dp), enabled = s.updateRepo.contains("/")) { Text("Vérifier") }
-                    Spacer(Modifier.width(12.dp))
-                    Text(updMsg, fontSize = 13.sp, color = cs.onSurfaceVariant)
-                }
-                Spacer(Modifier.height(14.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = { exportL.launch("island-reglages.json") }, shape = RoundedCornerShape(20.dp)) { Text("Exporter") }
-                    FilledTonalButton(onClick = { importL.launch(arrayOf("application/json", "*/*")) }, shape = RoundedCornerShape(20.dp)) { Text("Importer") }
-                }
-            }
-        }
-
-        item {
-            Card("Tuto QuickStar : barre d'état propre") {
-                TutoStep(1, "Ouvre Good Lock, puis le module QuickStar.")
-                TutoStep(2, "Va dans les icônes de la barre d'état et décoche tout sauf l'heure et la batterie (Wi-Fi, réseau, alarme, NFC, etc.).")
-                TutoStep(3, "Dans QuickStar, désactive l'affichage de la Now Bar / des notifications en direct dans la barre d'état (nouvelle option One UI 9). Elles restent sur l'écran verrouillé et dans le volet.")
-                TutoStep(4, "Icônes de notifications à gauche de l'heure : ça ne se règle pas dans QuickStar. Va dans Paramètres › Notifications › Paramètres avancés › Afficher les icônes de notification, et choisis Aucune.")
-                TutoStep(5, "Si des icônes réagissent au mauvais interrupteur : c'est un bug connu de QuickStar sous One UI 9. Mets à jour le module depuis Good Lock.")
-                TutoStep(6, "Optionnel : Paramètres › Notifications › Notifications en direct, désactive-les pour Horloge et l'enregistreur pour éviter les doublons.")
-                Spacer(Modifier.height(6.dp))
-                TextButton(onClick = {
-                    val i = ctx.packageManager.getLaunchIntentForPackage("com.samsung.android.goodlock")
-                    if (i != null) ctx.startActivity(i)
-                }) { Text("Ouvrir Good Lock") }
             }
         }
     }
@@ -1030,5 +1140,51 @@ private fun DeadZonesCard(s: Settings) {
                 Prefs.update { it.copy(showZones = true) }
             }, shape = RoundedCornerShape(20.dp)) { Text("Zones conseillées") }
         }
+    }
+}
+
+
+// ------------------------------------------------------------------ navigation
+
+private class PageDef(val key: String, val title: String, val subtitle: String, val keywords: String, val color: Color)
+
+private fun norm(v: String): String =
+    java.text.Normalizer.normalize(v.lowercase().trim(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
+@Composable
+private fun CategoryRow(p: PageDef, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(p.color), contentAlignment = Alignment.Center) {
+            Text(p.title.take(1), color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(p.title, fontSize = 16.sp, color = cs.onSurface)
+            Text(p.subtitle, fontSize = 13.sp, color = cs.onSurfaceVariant)
+        }
+        Text("›", fontSize = 22.sp, color = cs.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SubPage(title: String, bars: PaddingValues, onBack: () -> Unit, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    LazyColumn(
+        Modifier.fillMaxSize().background(cs.surface),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = bars.calculateTopPadding(), bottom = bars.calculateBottomPadding() + 24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            Column(Modifier.fillMaxWidth().height(150.dp).padding(start = 4.dp, bottom = 6.dp), verticalArrangement = Arrangement.Bottom) {
+                TextButton(onClick = onBack) { Text("‹ Retour") }
+                Text(title, fontSize = 30.sp, color = cs.onSurface, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+        item { PreviewCard() }
+        content()
     }
 }

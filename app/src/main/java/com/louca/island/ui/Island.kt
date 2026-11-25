@@ -333,7 +333,11 @@ fun IslandRoot(
                 .semantics { contentDescription = primary?.let { "${it.appName} ${it.title}" } ?: "Island" }
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onPress = { pressed = true; tryAwaitRelease(); pressed = false },
+                        onPress = {
+                            // Touching a notification keeps it on screen: it never vanishes under the finger.
+                            fun hold() = primaryState?.takeIf { it.kind == Kind.NOTIF }?.let { IslandStore.extend(it.id, 5000) }
+                            hold(); pressed = true; tryAwaitRelease(); pressed = false; hold()
+                        },
                         onTap = {
                             val p = primaryState ?: return@detectTapGestures
                             poke++
