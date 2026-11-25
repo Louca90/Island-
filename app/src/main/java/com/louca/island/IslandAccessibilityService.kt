@@ -343,7 +343,7 @@ class IslandAccessibilityService : AccessibilityService() {
             IslandStore.showStatus(
                 Act(id = "shot", kind = Kind.SHOT, title = "Capture d'écran", art = thumb, uri = uri.toString(),
                     stamp = System.currentTimeMillis()),
-                bigMs = 6_000, smallMs = 5_000,
+                bigMs = 3_000, smallMs = 5_000,
             )
         }
     }

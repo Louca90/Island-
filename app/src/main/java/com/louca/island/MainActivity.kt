@@ -282,7 +282,7 @@ object Demo {
         val card = android.graphics.Paint().apply { color = 0x33FFFFFF }
         for (i in 0 until 5) cv.drawRoundRect(28f, 120f + i * 120f, 332f, 210f + i * 120f, 22f, 22f, card)
         IslandStore.showStatus(Act(id = "shot", kind = Kind.SHOT, pkg = IslandStore.DEMO, title = "Capture d'écran", art = bmp, stamp = now()),
-            bigMs = 6_000, smallMs = 5_000)
+            bigMs = 3_000, smallMs = 5_000)
     }
 
     private var sysI = 0
@@ -494,7 +494,7 @@ private fun Home() {
                     Card("Intégrations") {
                         Toggle("Itinéraires", "Google Maps, Waze… : prochaine direction et distance.", s.showNav) { v -> Prefs.update { it.copy(showNav = v) } }
                         Toggle("Activités en direct", "Live Updates Android : livraisons, VTC, téléchargements, Quick Share, scores sportifs.", s.showLive) { v -> Prefs.update { it.copy(showLive = v) } }
-                        Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible. En grand 10 s, puis en petit 5 s.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
+                        Toggle("Alertes système", "Silencieux / vibreur, Ne pas déranger, batterie faible. En grand 3 s, puis en petit 5 s.", s.showSystem) { v -> Prefs.update { it.copy(showSystem = v) } }
                         Toggle("Captures d'écran", "Aperçu avec Partager, Modifier et Supprimer juste après la capture.", s.showShots) { v -> Prefs.update { it.copy(showShots = v) } }
                         if (s.showShots && !imgOk) Step("Accès aux photos", "Pour voir les nouvelles captures d'écran.", false, "Autoriser") {
                             permLauncher.launch(arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES))

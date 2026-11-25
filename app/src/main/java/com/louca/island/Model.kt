@@ -401,7 +401,7 @@ object IslandStore {
      * large for [bigMs] and impossible to dismiss, then small for [smallMs], then gone.
      * A refresh while still large only updates the content.
      */
-    fun showStatus(a: Act, bigMs: Long = 10_000, smallMs: Long = 5_000) {
+    fun showStatus(a: Act, bigMs: Long = 3_000, smallMs: Long = 5_000) {
         val now = System.currentTimeMillis()
         val cur = acts.value.find { it.id == a.id }
         if (cur != null && cur.bigUntil > now) {
