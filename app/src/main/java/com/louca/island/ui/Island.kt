@@ -491,10 +491,28 @@ private fun Bubble(a: Act, c: IslandColors, size: Dp, modifier: Modifier, onTap:
 
 @Composable
 private fun CountBadge(n: Int, c: IslandColors, modifier: Modifier = Modifier) {
+    // Monochrome pill in the island's own colours: light chip, dark number, thin ring to sit cleanly on the bubble.
     Box(
-        modifier.height(14.dp).clip(RoundedCornerShape(7.dp)).background(c.red).padding(horizontal = 4.dp),
+        modifier
+            .height(16.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(c.bg)
+            .padding(1.5.dp)
+            .clip(RoundedCornerShape(7.dp))
+            .background(c.fg)
+            .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
-    ) { T(if (n > 99) "99+" else "$n", Color.White, 9, FontWeight.Bold, style = Num) }
+    ) {
+        AnimatedContent(
+            targetState = n,
+            transitionSpec = {
+                val up = targetState > initialState
+                (fadeIn(tween(160)) + androidx.compose.animation.slideInVertically(tween(220, easing = FastOutSlowInEasing)) { if (up) it else -it })
+                    .togetherWith(fadeOut(tween(120)) + androidx.compose.animation.slideOutVertically(tween(200)) { if (up) -it else it })
+            },
+            label = "badge",
+        ) { v -> T(if (v > 99) "99+" else "$v", c.bg, 9, FontWeight.Bold, style = Num) }
+    }
 }
 
 @Composable
