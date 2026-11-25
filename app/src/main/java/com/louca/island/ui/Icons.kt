@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -43,6 +44,34 @@ import kotlin.math.sin
 
 private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
+/**
+ * Appearance phase of the icons in the current island content: 0 → 1 while it opens,
+ * back to 0 while it closes. Outside the island it stays at 1 (no animation).
+ */
+val LocalIconPhase = androidx.compose.runtime.compositionLocalOf<androidx.compose.runtime.State<Float>> { StaticPhase }
+private val StaticPhase = androidx.compose.runtime.mutableFloatStateOf(1f)
+
+private fun ease(t: Float) = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
+/** Maps [t] from the window [a, b] to 0..1, to sequence parts of an icon. */
+private fun seg(t: Float, a: Float, b: Float) = ((t - a) / (b - a)).coerceIn(0f, 1f)
+
+/** Shared "appear": the symbol grows in from 60 % and fades in, without overshoot. */
+private fun Modifier.appear(ph: androidx.compose.runtime.State<Float>) = graphicsLayer {
+    val k = ph.value
+    if (k < 1f) {
+        val e = ease(seg(k, 0f, .7f))
+        alpha = seg(k, 0f, .35f)
+        scaleX = .6f + .4f * e; scaleY = .6f + .4f * e
+    }
+}
+
+/** First [k] of a single-contour path: a stroke that draws itself. */
+private fun trim(path: Path, k: Float): Path {
+    if (k >= 1f) return path
+    val pm = PathMeasure().apply { setPath(path, false) }
+    return Path().also { pm.getSegment(0f, pm.length * k.coerceIn(0f, 1f), it, true) }
+}
+
 /** Fills a polygon with rounded joins, drawn natively for crisp anti-aliasing. */
 private fun DrawScope.roundPoly(pts: List<Offset>, color: Color, corner: Float) {
     if (pts.isEmpty()) return
@@ -63,11 +92,12 @@ private fun DrawScope.roundPoly(pts: List<Offset>, color: Color, corner: Float) 
 /** Play ⇄ Pause: the two bars morph into the two halves of the triangle. No overshoot. */
 @Composable
 fun PlayPauseIcon(playing: Boolean, color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val p by animateFloatAsState(
         if (playing) 0f else 1f,
         tween(300, easing = FastOutSlowInEasing), label = "pp"
     )
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val t = p.coerceIn(0f, 1f)
         val w = this.size.width
         val corner = w * 0.075f
@@ -90,6 +120,7 @@ fun PlayPauseIcon(playing: Boolean, color: Color, size: Dp, modifier: Modifier =
 /** Next / previous: one triangle grows in, the pair slides, the last one shrinks out. */
 @Composable
 fun SkipIcon(forward: Boolean, trigger: Int, color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val t = remember { Animatable(0f) }
     LaunchedEffect(trigger) {
         if (trigger == 0) return@LaunchedEffect
@@ -97,7 +128,7 @@ fun SkipIcon(forward: Boolean, trigger: Int, color: Color, size: Dp, modifier: M
         t.animateTo(1f, tween(420, easing = FastOutSlowInEasing))
         t.snapTo(0f)
     }
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val k = t.value
         fun tri(x0: Float, s: Float, pivot: Offset): List<Offset> {
@@ -117,11 +148,12 @@ fun SkipIcon(forward: Boolean, trigger: Int, color: Color, size: Dp, modifier: M
 /** Padlock whose shackle lifts and swings open on unlock. */
 @Composable
 fun LockIcon(unlocked: Boolean, color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val u by animateFloatAsState(
         if (unlocked) 1f else 0f,
         tween(520, easing = FastOutSlowInEasing), label = "lock"
     )
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val lift = (u * 1.7f).coerceIn(0f, 1f)
         val swing = ((u - 0.4f) / 0.6f).coerceIn(0f, 1f)
@@ -131,7 +163,7 @@ fun LockIcon(unlocked: Boolean, color: Color, size: Dp, modifier: Modifier = Mod
             cubicTo(.335f * w, .13f * w, .665f * w, .13f * w, .665f * w, .33f * w)
             lineTo(.665f * w, .50f * w)
         }
-        translate(0f, -0.11f * w * lift) {
+        translate(0f, -0.11f * w * lift - (1f - ease(seg(ph.value, .15f, 1f))) * w * .12f) {
             rotate(24f * swing, Offset(.665f * w, .50f * w)) {
                 drawPath(shackle, color, style = Stroke(w * .09f, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
@@ -146,6 +178,7 @@ fun LockIcon(unlocked: Boolean, color: Color, size: Dp, modifier: Modifier = Mod
 /** Four bars that dance while playing and settle when paused. */
 @Composable
 fun Equalizer(playing: Boolean, color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "eq")
     val durs = intArrayOf(430, 560, 380, 510)
     val bars = durs.mapIndexed { i, d ->
@@ -157,12 +190,12 @@ fun Equalizer(playing: Boolean, color: Color, size: Dp, modifier: Modifier = Mod
         )
     }
     val amt by animateFloatAsState(if (playing) 1f else 0f, tween(350, easing = FastOutSlowInEasing), label = "amt")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val bw = w * .13f
         val gap = (w - bw * 4) / 3f
         bars.forEachIndexed { i, b ->
-            val h = w * lerp(0.22f, b.value * 0.86f, amt).coerceAtLeast(0.2f)
+            val h = w * lerp(0.22f, b.value * 0.86f, amt).coerceAtLeast(0.2f) * (.3f + .7f * ease(seg(ph.value, .1f + i * .08f, 1f)))
             val x = i * (bw + gap)
             drawRoundRect(color, Offset(x, (w - h) / 2f), Size(bw, h), CornerRadius(bw / 2))
         }
@@ -172,14 +205,19 @@ fun Equalizer(playing: Boolean, color: Color, size: Dp, modifier: Modifier = Mod
 /** Stopwatch with a sweeping hand. */
 @Composable
 fun StopwatchIcon(seconds: Float, color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .095f, cap = StrokeCap.Round)
         val c = Offset(w / 2, w * .56f)
-        drawCircle(color, w * .34f, c, style = st)
-        drawLine(color, Offset(w * .42f, w * .08f), Offset(w * .58f, w * .08f), w * .095f, StrokeCap.Round)
-        drawLine(color, Offset(w / 2, w * .1f), Offset(w / 2, w * .2f), w * .095f, StrokeCap.Round)
-        rotate(seconds * 6f, c) {
+        val e = ease(seg(ph.value, .05f, 1f))
+        drawArc(color, -90f, 360f * e, false, Offset(c.x - w * .34f, c.y - w * .34f), Size(w * .68f, w * .68f), style = st)
+        val crown = ease(seg(ph.value, .4f, 1f))
+        translate(0f, (1f - crown) * w * .12f) {
+            drawLine(color.copy(alpha = color.alpha * crown), Offset(w * .42f, w * .08f), Offset(w * .58f, w * .08f), w * .095f, StrokeCap.Round)
+            drawLine(color.copy(alpha = color.alpha * crown), Offset(w / 2, w * .1f), Offset(w / 2, w * .2f), w * .095f, StrokeCap.Round)
+        }
+        rotate(seconds * 6f - (1f - e) * 300f, c) {
             drawLine(color, c, Offset(c.x, c.y - w * .22f), w * .095f, StrokeCap.Round)
         }
         drawCircle(color, w * .055f, c)
@@ -189,10 +227,11 @@ fun StopwatchIcon(seconds: Float, color: Color, size: Dp, modifier: Modifier = M
 /** Breathing record dot. */
 @Composable
 fun RecDot(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "rec")
     val a by inf.animateFloat(1f, 0.35f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "a")
     val r by inf.animateFloat(1f, 1.9f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "r")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         drawCircle(color.copy(alpha = (1.9f - r) / 0.9f * 0.35f), w * .22f * r)
         drawCircle(color.copy(alpha = 0.55f + 0.45f * a), w * .22f)
@@ -204,9 +243,10 @@ private val boltPts = listOf(.58f to .05f, .22f to .56f, .47f to .56f, .40f to .
 /** Lightning bolt that draws itself, then fills. */
 @Composable
 fun BoltIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val t = remember { Animatable(0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(700, easing = FastOutSlowInEasing)) }
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val path = Path().apply {
             moveTo(boltPts[0].first * w, boltPts[0].second * w)
@@ -215,9 +255,10 @@ fun BoltIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         }
         val pm = PathMeasure().apply { setPath(path, false) }
         val seg = Path()
-        pm.getSegment(0f, pm.length * (t.value / 0.75f).coerceAtMost(1f), seg, true)
+        val k = minOf(t.value, ph.value)
+        pm.getSegment(0f, pm.length * (k / 0.75f).coerceAtMost(1f), seg, true)
         drawPath(seg, color, style = Stroke(w * .08f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        val fill = ((t.value - 0.6f) / 0.4f).coerceIn(0f, 1f)
+        val fill = ((k - 0.6f) / 0.4f).coerceIn(0f, 1f)
         if (fill > 0f) drawPath(path, color.copy(alpha = fill))
     }
 }
@@ -225,13 +266,14 @@ fun BoltIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 /** Battery outline with animated fill. */
 @Composable
 fun BatteryGlyph(level: Int, color: Color, fill: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val l by animateFloatAsState(level / 100f, tween(900, easing = FastOutSlowInEasing), label = "bat")
-    Canvas(modifier.size(size, size * 0.5f)) {
+    Canvas(modifier.size(size, size * 0.5f).appear(ph)) {
         val w = this.size.width; val h = this.size.height
         drawRoundRect(color.copy(alpha = .45f), Offset(0f, 0f), Size(w * .9f, h), CornerRadius(h * .3f), style = Stroke(w * .05f))
         drawRoundRect(color.copy(alpha = .45f), Offset(w * .93f, h * .3f), Size(w * .07f, h * .4f), CornerRadius(w * .03f))
         val pad = w * .07f
-        drawRoundRect(fill, Offset(pad, pad), Size((w * .9f - pad * 2) * l, h - pad * 2), CornerRadius(h * .18f))
+        drawRoundRect(fill, Offset(pad, pad), Size((w * .9f - pad * 2) * l * ease(seg(ph.value, .25f, 1f)), h - pad * 2), CornerRadius(h * .18f))
     }
 }
 
@@ -244,14 +286,15 @@ private val handsetPath by lazy {
 /** Phone handset; [hangUp] turns it 135° and [ring] makes it wiggle. */
 @Composable
 fun HandsetIcon(color: Color, size: Dp, hangUp: Boolean = false, ring: Boolean = false, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "ring")
     val wig by inf.animateFloat(
         -1f, 1f, infiniteRepeatable(tween(90, easing = LinearEasing), RepeatMode.Reverse), label = "w"
     )
     val burst by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "bu")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        val angle = (if (hangUp) 135f else 0f) + if (ring && burst < 0.35f) wig * 12f else 0f
+        val angle = (if (hangUp) 135f else 0f) + (if (ring && burst < 0.35f) wig * 12f else 0f) - (1f - ease(ph.value)) * 50f
         rotate(angle) {
             scale(w / 24f, w / 24f, Offset.Zero) {
                 drawPath(handsetPath, color)
@@ -263,7 +306,8 @@ fun HandsetIcon(color: Color, size: Dp, hangUp: Boolean = false, ring: Boolean =
 /** Speech bubble used as fallback app icon. */
 @Composable
 fun BubbleIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val p = Path().apply {
             addRoundRect(androidx.compose.ui.geometry.RoundRect(w * .12f, w * .16f, w * .88f, w * .7f, CornerRadius(w * .18f)))
@@ -276,11 +320,14 @@ fun BubbleIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 /** Bell; [slash] draws a diagonal line on, [ring] swings it briefly. */
 @Composable
 fun BellIcon(color: Color, size: Dp, slash: Boolean = false, ring: Boolean = false, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val t = remember { Animatable(0f) }
     LaunchedEffect(slash, ring) { t.snapTo(0f); t.animateTo(1f, tween(650, easing = FastOutSlowInEasing)) }
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        val swing = if (ring) sin(t.value * PI.toFloat() * 4f) * (1f - t.value) * 18f else 0f
+        val q = seg(ph.value, .15f, 1f)
+        val swing = if (ring) sin(t.value * PI.toFloat() * 4f) * (1f - t.value) * 18f
+            else sin(q * PI.toFloat() * 3f) * (1f - q) * 16f
         rotate(swing, Offset(w / 2, w * .12f)) {
             val p = Path().apply {
                 moveTo(w * .2f, w * .7f)
@@ -294,8 +341,8 @@ fun BellIcon(color: Color, size: Dp, slash: Boolean = false, ring: Boolean = fal
             drawCircle(color, w * .05f, Offset(w / 2, w * .2f))
         }
         if (slash) {
-            val k = t.value
-            drawLine(
+            val k = minOf(t.value, ease(seg(ph.value, .3f, 1f)))
+            if (k > 0f) drawLine(
                 color, Offset(w * .16f, w * .12f), Offset(w * (.16f + .68f * k), w * (.12f + .76f * k)),
                 w * .09f, StrokeCap.Round
             )
@@ -306,75 +353,93 @@ fun BellIcon(color: Color, size: Dp, slash: Boolean = false, ring: Boolean = fal
 /** Phone with vibration ticks moving out. */
 @Composable
 fun VibrateIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "vib")
     val x by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(70, easing = LinearEasing), RepeatMode.Reverse), label = "x")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         translate(x * w * .03f, 0f) {
             drawRoundRect(color, Offset(w * .33f, w * .14f), Size(w * .34f, w * .72f), CornerRadius(w * .08f), style = Stroke(w * .08f))
         }
         val st = w * .07f
-        drawLine(color, Offset(w * .17f, w * .36f), Offset(w * .17f, w * .64f), st, StrokeCap.Round)
-        drawLine(color, Offset(w * .83f, w * .36f), Offset(w * .83f, w * .64f), st, StrokeCap.Round)
+        val hl = w * .14f * ease(seg(ph.value, .3f, 1f))
+        if (hl > 0f) {
+            drawLine(color, Offset(w * .17f, w * .5f - hl), Offset(w * .17f, w * .5f + hl), st, StrokeCap.Round)
+            drawLine(color, Offset(w * .83f, w * .5f - hl), Offset(w * .83f, w * .5f + hl), st, StrokeCap.Round)
+        }
     }
 }
 
 /** Crescent moon (Do Not Disturb). */
 @Composable
 fun MoonIcon(color: Color, cut: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val t = remember { Animatable(0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(500, easing = FastOutSlowInEasing)) }
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawCircle(color, w * .36f, Offset(w / 2, w / 2))
-        drawCircle(cut, w * .32f, Offset(w * (.5f + .55f * t.value), w * (.5f - .25f * t.value)))
+        val m = minOf(t.value, ease(seg(ph.value, .1f, 1f)))
+        rotate(-40f * (1f - m)) {
+            drawCircle(color, w * .36f, Offset(w / 2, w / 2))
+            drawCircle(cut, w * .32f, Offset(w * (.5f + .55f * m), w * (.5f - .25f * m)))
+        }
     }
 }
 
 /** Microphone for voice recordings. */
 @Composable
 fun MicIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawRoundRect(color, Offset(w * .36f, w * .1f), Size(w * .28f, w * .48f), CornerRadius(w * .14f))
+        val e = ease(seg(ph.value, 0f, .6f))
+        translate(0f, -(1f - e) * w * .14f) {
+            drawRoundRect(color, Offset(w * .36f, w * .1f), Size(w * .28f, w * .48f), CornerRadius(w * .14f))
+        }
         val arc = Path().apply {
             moveTo(w * .24f, w * .44f)
             cubicTo(w * .24f, w * .78f, w * .76f, w * .78f, w * .76f, w * .44f)
         }
-        drawPath(arc, color, style = Stroke(w * .08f, cap = StrokeCap.Round))
-        drawLine(color, Offset(w / 2, w * .7f), Offset(w / 2, w * .88f), w * .08f, StrokeCap.Round)
+        drawPath(trim(arc, ease(seg(ph.value, .25f, .85f))), color, style = Stroke(w * .08f, cap = StrokeCap.Round))
+        val st = ease(seg(ph.value, .6f, 1f))
+        if (st > 0f) drawLine(color, Offset(w / 2, w * .7f), Offset(w / 2, w * (.7f + .18f * st)), w * .08f, StrokeCap.Round)
     }
 }
 
 /** Fallback turn arrow for navigation. */
 @Composable
 fun NavArrow(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val p = Path().apply {
             moveTo(w * .3f, w * .9f); lineTo(w * .3f, w * .5f)
             cubicTo(w * .3f, w * .38f, w * .38f, w * .32f, w * .5f, w * .32f)
             lineTo(w * .7f, w * .32f)
         }
-        drawPath(p, color, style = Stroke(w * .11f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        roundPoly(listOf(Offset(w * .64f, w * .14f), Offset(w * .88f, w * .32f), Offset(w * .64f, w * .5f)), color, w * .05f)
+        drawPath(trim(p, ease(seg(ph.value, 0f, .7f))), color, style = Stroke(w * .11f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        val hq = ease(seg(ph.value, .55f, 1f))
+        if (hq > 0f) scale(hq, hq, Offset(w * .72f, w * .32f)) {
+            roundPoly(listOf(Offset(w * .64f, w * .14f), Offset(w * .88f, w * .32f), Offset(w * .64f, w * .5f)), color, w * .05f)
+        }
     }
 }
 
 /** Determinate ring; progress < 0 spins as indeterminate. */
 @Composable
 fun ProgressRing(progress: Float, color: Color, track: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "ring")
     val spin by inf.animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "s")
     val p by animateFloatAsState(progress.coerceIn(0f, 1f), tween(400, easing = FastOutSlowInEasing), label = "p")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .14f, cap = StrokeCap.Round)
         val inset = w * .07f
         val tl = Offset(inset, inset); val sz = Size(w - inset * 2, w - inset * 2)
         drawArc(track, 0f, 360f, false, tl, sz, style = st)
         if (progress < 0f) drawArc(color, spin - 90f, 90f, false, tl, sz, style = st)
-        else drawArc(color, -90f, 360f * p, false, tl, sz, style = st)
+        else drawArc(color, -90f, 360f * p * ease(seg(ph.value, .1f, 1f)), false, tl, sz, style = st)
     }
 }
 
@@ -382,8 +447,9 @@ fun ProgressRing(progress: Float, color: Color, track: Color, size: Dp, modifier
 /** Heart that fills from the bottom when liked. */
 @Composable
 fun HeartIcon(liked: Boolean, color: Color, fillColor: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val f by animateFloatAsState(if (liked) 1f else 0f, tween(320, easing = FastOutSlowInEasing), label = "heart")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val p = Path().apply {
             moveTo(w * .5f, w * .84f)
@@ -403,8 +469,9 @@ fun HeartIcon(liked: Boolean, color: Color, fillColor: Color, size: Dp, modifier
 /** Shuffle arrows; active state gets the accent and a dot. */
 @Composable
 fun ShuffleIcon(active: Boolean, color: Color, activeColor: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val k by animateFloatAsState(if (active) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "sh")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val col = androidx.compose.ui.graphics.lerp(color, activeColor, k)
         val st = Stroke(w * .08f, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -429,7 +496,8 @@ fun ShuffleIcon(active: Boolean, color: Color, activeColor: Color, size: Dp, mod
 
 @Composable
 fun CrossIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         drawLine(color, Offset(0f, 0f), Offset(w, w), w * .2f, StrokeCap.Round)
         drawLine(color, Offset(w, 0f), Offset(0f, w), w * .2f, StrokeCap.Round)
@@ -438,26 +506,30 @@ fun CrossIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 
 @Composable
 fun SendArrow(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .13f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawLine(color, Offset(w / 2, w * .85f), Offset(w / 2, w * .18f), w * .13f, StrokeCap.Round)
-        val head = Path().apply { moveTo(w * .2f, w * .46f); lineTo(w / 2, w * .16f); lineTo(w * .8f, w * .46f) }
-        drawPath(head, color, style = st)
+        translate(0f, (1f - ease(ph.value)) * w * .25f) {
+            drawLine(color, Offset(w / 2, w * .85f), Offset(w / 2, w * .18f), w * .13f, StrokeCap.Round)
+            val head = Path().apply { moveTo(w * .2f, w * .46f); lineTo(w / 2, w * .16f); lineTo(w * .8f, w * .46f) }
+            drawPath(head, color, style = st)
+        }
     }
 }
 
 /** Check mark that draws itself. */
 @Composable
 fun CheckIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val t = remember { Animatable(0f) }
     LaunchedEffect(Unit) { t.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val p = Path().apply { moveTo(w * .18f, w * .52f); lineTo(w * .42f, w * .74f); lineTo(w * .84f, w * .28f) }
         val pm = PathMeasure().apply { setPath(p, false) }
         val seg = Path()
-        pm.getSegment(0f, pm.length * t.value, seg, true)
+        pm.getSegment(0f, pm.length * minOf(t.value, ease(seg(ph.value, .15f, 1f))), seg, true)
         drawPath(seg, color, style = Stroke(w * .13f, cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
@@ -465,73 +537,104 @@ fun CheckIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 /** Lap flag. */
 @Composable
 fun LapIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         drawLine(color, Offset(w * .26f, w * .12f), Offset(w * .26f, w * .9f), w * .1f, StrokeCap.Round)
-        roundPoly(listOf(Offset(w * .3f, w * .14f), Offset(w * .8f, w * .3f), Offset(w * .3f, w * .5f)), color, w * .06f)
+        val f = ease(seg(ph.value, .25f, 1f))
+        if (f > 0f) scale(f, 1f, Offset(w * .3f, w * .3f)) {
+            roundPoly(listOf(Offset(w * .3f, w * .14f), Offset(w * .8f, w * .3f), Offset(w * .3f, w * .5f)), color, w * .06f)
+        }
     }
 }
 
 /** Circular arrow (reset). */
 @Composable
 fun ResetIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val inset = w * .16f
+        rotate(-200f * (1f - ease(ph.value))) {
         drawArc(color, -60f, 300f, false, Offset(inset, inset), Size(w - inset * 2, w - inset * 2),
             style = Stroke(w * .1f, cap = StrokeCap.Round))
         roundPoly(listOf(Offset(w * .6f, w * .06f), Offset(w * .86f, w * .2f), Offset(w * .6f, w * .36f)), color, w * .04f)
+        }
     }
 }
 
 @Composable
 fun CalendarIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawRoundRect(color, Offset(w * .14f, w * .2f), Size(w * .72f, w * .66f), CornerRadius(w * .14f), style = Stroke(w * .09f))
-        drawLine(color, Offset(w * .14f, w * .4f), Offset(w * .86f, w * .4f), w * .09f)
+        val e = ease(seg(ph.value, 0f, .75f))
+        withTransform({ scale(1f, .25f + .75f * e, Offset(w / 2, w * .2f)) }) {
+            drawRoundRect(color, Offset(w * .14f, w * .2f), Size(w * .72f, w * .66f), CornerRadius(w * .14f), style = Stroke(w * .09f))
+            drawLine(color, Offset(w * .14f, w * .4f), Offset(w * .86f, w * .4f), w * .09f)
+        }
         drawLine(color, Offset(w * .34f, w * .1f), Offset(w * .34f, w * .26f), w * .09f, StrokeCap.Round)
         drawLine(color, Offset(w * .66f, w * .1f), Offset(w * .66f, w * .26f), w * .09f, StrokeCap.Round)
-        drawCircle(color, w * .06f, Offset(w * .38f, w * .62f))
+        drawCircle(color, w * .06f * ease(seg(ph.value, .55f, 1f)), Offset(w * .38f, w * .62f))
     }
 }
 
 @Composable
 fun HeadphonesIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawArc(color, 180f, 180f, false, Offset(w * .14f, w * .16f), Size(w * .72f, w * .7f), style = Stroke(w * .09f, cap = StrokeCap.Round))
-        drawRoundRect(color, Offset(w * .1f, w * .52f), Size(w * .2f, w * .34f), CornerRadius(w * .08f))
-        drawRoundRect(color, Offset(w * .7f, w * .52f), Size(w * .2f, w * .34f), CornerRadius(w * .08f))
+        val e = ease(seg(ph.value, 0f, .75f))
+        drawArc(color, 270f - 90f * e, 180f * e, false, Offset(w * .14f, w * .16f), Size(w * .72f, w * .7f), style = Stroke(w * .09f, cap = StrokeCap.Round))
+        val cup = ease(seg(ph.value, .35f, 1f))
+        val cc = color.copy(alpha = color.alpha * cup)
+        translate(0f, (1f - cup) * w * .18f) {
+            drawRoundRect(cc, Offset(w * .1f, w * .52f), Size(w * .2f, w * .34f), CornerRadius(w * .08f))
+            drawRoundRect(cc, Offset(w * .7f, w * .52f), Size(w * .2f, w * .34f), CornerRadius(w * .08f))
+        }
     }
 }
 
 @Composable
 fun KeyIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawCircle(color, w * .2f, Offset(w * .32f, w * .5f), style = Stroke(w * .1f))
-        drawLine(color, Offset(w * .52f, w * .5f), Offset(w * .9f, w * .5f), w * .1f, StrokeCap.Round)
-        drawLine(color, Offset(w * .78f, w * .5f), Offset(w * .78f, w * .66f), w * .1f, StrokeCap.Round)
-        drawLine(color, Offset(w * .9f, w * .5f), Offset(w * .9f, w * .62f), w * .1f, StrokeCap.Round)
+        rotate(-90f * (1f - ease(seg(ph.value, .1f, 1f))), Offset(w * .32f, w * .5f)) {
+            drawCircle(color, w * .2f, Offset(w * .32f, w * .5f), style = Stroke(w * .1f))
+            drawLine(color, Offset(w * .52f, w * .5f), Offset(w * .9f, w * .5f), w * .1f, StrokeCap.Round)
+            val tq = ease(seg(ph.value, .5f, 1f))
+            if (tq > 0f) {
+                drawLine(color, Offset(w * .78f, w * .5f), Offset(w * .78f, w * (.5f + .16f * tq)), w * .1f, StrokeCap.Round)
+                drawLine(color, Offset(w * .9f, w * .5f), Offset(w * .9f, w * (.5f + .12f * tq)), w * .1f, StrokeCap.Round)
+            }
+        }
     }
 }
 
 /** Alarm clock that keeps shaking while it rings. */
 @Composable
 fun AlarmClockIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "al")
     val wig by inf.animateFloat(-1f, 1f, infiniteRepeatable(tween(80, easing = LinearEasing), RepeatMode.Reverse), label = "w")
     val burst by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "b")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         rotate(if (burst < .4f) wig * 10f else 0f) {
             val c = Offset(w / 2, w * .55f)
-            drawCircle(color, w * .32f, c, style = Stroke(w * .09f))
-            drawLine(color, c, Offset(c.x, c.y - w * .17f), w * .08f, StrokeCap.Round)
-            drawLine(color, c, Offset(c.x + w * .12f, c.y + w * .06f), w * .08f, StrokeCap.Round)
-            drawArc(color, 200f, 70f, false, Offset(w * .04f, w * .06f), Size(w * .34f, w * .34f), style = Stroke(w * .09f, cap = StrokeCap.Round))
-            drawArc(color, 270f, 70f, false, Offset(w * .62f, w * .06f), Size(w * .34f, w * .34f), style = Stroke(w * .09f, cap = StrokeCap.Round))
+            val e = ease(seg(ph.value, 0f, .8f))
+            drawArc(color, -90f, 360f * e, false, Offset(c.x - w * .32f, c.y - w * .32f), Size(w * .64f, w * .64f), style = Stroke(w * .09f))
+            rotate(-(1f - e) * 240f, c) {
+                drawLine(color, c, Offset(c.x, c.y - w * .17f), w * .08f, StrokeCap.Round)
+                drawLine(color, c, Offset(c.x + w * .12f, c.y + w * .06f), w * .08f, StrokeCap.Round)
+            }
+            val b = ease(seg(ph.value, .4f, 1f))
+            translate(0f, -(1f - b) * w * .1f) {
+                val bc = color.copy(alpha = color.alpha * b)
+                drawArc(bc, 200f, 70f, false, Offset(w * .04f, w * .06f), Size(w * .34f, w * .34f), style = Stroke(w * .09f, cap = StrokeCap.Round))
+                drawArc(bc, 270f, 70f, false, Offset(w * .62f, w * .06f), Size(w * .34f, w * .34f), style = Stroke(w * .09f, cap = StrokeCap.Round))
+            }
         }
     }
 }
@@ -539,7 +642,8 @@ fun AlarmClockIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 /** Speech bubble with text lines (lyrics). */
 @Composable
 fun LyricsIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         val p = Path().apply {
@@ -547,29 +651,32 @@ fun LyricsIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         }
         drawPath(p, color, style = st)
         drawLine(color, Offset(w * .3f, w * .72f), Offset(w * .24f, w * .9f), w * .09f, StrokeCap.Round)
-        drawLine(color, Offset(w * .28f, w * .36f), Offset(w * .72f, w * .36f), w * .08f, StrokeCap.Round)
-        drawLine(color, Offset(w * .28f, w * .5f), Offset(w * .56f, w * .5f), w * .08f, StrokeCap.Round)
+        val l1 = ease(seg(ph.value, .25f, .75f)); val l2 = ease(seg(ph.value, .45f, 1f))
+        if (l1 > 0f) drawLine(color, Offset(w * .28f, w * .36f), Offset(w * (.28f + .44f * l1), w * .36f), w * .08f, StrokeCap.Round)
+        if (l2 > 0f) drawLine(color, Offset(w * .28f, w * .5f), Offset(w * (.28f + .28f * l2), w * .5f), w * .08f, StrokeCap.Round)
     }
 }
 
 /** Screen recording: the classic record button — a ring with a pulsing solid dot. */
 @Composable
 fun ScreenRecIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "sr")
     val p by inf.animateFloat(1f, .72f, infiniteRepeatable(tween(850, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
-        drawCircle(color, w * .42f, style = Stroke(w * .1f))
-        drawCircle(color, w * .24f * p)
+        drawArc(color, -90f, 360f * ease(seg(ph.value, 0f, .75f)), false, Offset(w * .08f, w * .08f), Size(w * .84f, w * .84f), style = Stroke(w * .1f))
+        drawCircle(color, w * .24f * p * ease(seg(ph.value, .35f, 1f)))
     }
 }
 
 /** Flashlight; [on] adds a soft animated beam. */
 @Composable
 fun FlashIcon(color: Color, size: Dp, on: Boolean = false, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val inf = rememberInfiniteTransition(label = "fl")
     val g by inf.animateFloat(.55f, 1f, infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val head = Path().apply {
             moveTo(w * .3f, w * .3f); lineTo(w * .7f, w * .3f); lineTo(w * .62f, w * .46f); lineTo(w * .38f, w * .46f); close()
@@ -579,20 +686,27 @@ fun FlashIcon(color: Color, size: Dp, on: Boolean = false, modifier: Modifier = 
         if (on) {
             val st = w * .07f
             val c = color.copy(alpha = g)
-            drawLine(c, Offset(w * .5f, w * .2f), Offset(w * .5f, w * .06f), st, StrokeCap.Round)
-            drawLine(c, Offset(w * .3f, w * .22f), Offset(w * .2f, w * .1f), st, StrokeCap.Round)
-            drawLine(c, Offset(w * .7f, w * .22f), Offset(w * .8f, w * .1f), st, StrokeCap.Round)
+            val q = ease(seg(ph.value, .35f, 1f))
+            if (q > 0f) {
+                drawLine(c, Offset(w * .5f, w * .2f), Offset(w * .5f, w * (.2f - .14f * q)), st, StrokeCap.Round)
+                drawLine(c, Offset(w * .3f, w * .22f), Offset(w * (.3f - .1f * q), w * (.22f - .12f * q)), st, StrokeCap.Round)
+                drawLine(c, Offset(w * .7f, w * .22f), Offset(w * (.7f + .1f * q), w * (.22f - .12f * q)), st, StrokeCap.Round)
+            }
         }
     }
 }
 
 @Composable
 fun TrashIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .09f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawLine(color, Offset(w * .16f, w * .26f), Offset(w * .84f, w * .26f), w * .09f, StrokeCap.Round)
-        drawLine(color, Offset(w * .4f, w * .14f), Offset(w * .6f, w * .14f), w * .09f, StrokeCap.Round)
+        val lid = 1f - ease(seg(ph.value, .2f, 1f))
+        rotate(-25f * lid, Offset(w * .16f, w * .26f)) {
+            drawLine(color, Offset(w * .16f, w * .26f), Offset(w * .84f, w * .26f), w * .09f, StrokeCap.Round)
+            drawLine(color, Offset(w * .4f, w * .14f), Offset(w * .6f, w * .14f), w * .09f, StrokeCap.Round)
+        }
         val body = Path().apply {
             moveTo(w * .24f, w * .32f); lineTo(w * .3f, w * .86f); lineTo(w * .7f, w * .86f); lineTo(w * .76f, w * .32f)
         }
@@ -603,9 +717,11 @@ fun TrashIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
 /** Hourglass (countdown timer). */
 @Composable
 fun HourglassIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        rotate(180f * (1f - ease(ph.value))) {
         drawLine(color, Offset(w * .2f, w * .1f), Offset(w * .8f, w * .1f), w * .1f, StrokeCap.Round)
         drawLine(color, Offset(w * .2f, w * .9f), Offset(w * .8f, w * .9f), w * .1f, StrokeCap.Round)
         val body = Path().apply {
@@ -615,35 +731,45 @@ fun HourglassIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
         drawPath(body, color, style = st)
         val sand = Path().apply { moveTo(w * .36f, w * .84f); lineTo(w * .5f, w * .66f); lineTo(w * .64f, w * .84f); close() }
         drawPath(sand, color)
+        }
     }
 }
 
 /** Repeat: two looping arrows; mode 2 (one) adds a small dot. Mode < 0 = unsupported (dimmed). */
 @Composable
 fun RepeatIcon(mode: Int, color: Color, activeColor: Color, size: Dp, modifier: Modifier = Modifier) {
+    val ph = LocalIconPhase.current
     val k by animateFloatAsState(if (mode > 0) 1f else 0f, tween(260, easing = FastOutSlowInEasing), label = "rp")
-    Canvas(modifier.size(size)) {
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val col = androidx.compose.ui.graphics.lerp(color, activeColor, k)
         val st = Stroke(w * .08f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        rotate(-150f * (1f - ease(ph.value))) {
         val top = Path().apply { moveTo(w * .18f, w * .5f); lineTo(w * .18f, w * .4f); cubicTo(w * .18f, w * .3f, w * .24f, w * .28f, w * .34f, w * .28f); lineTo(w * .8f, w * .28f) }
         val bot = Path().apply { moveTo(w * .82f, w * .5f); lineTo(w * .82f, w * .6f); cubicTo(w * .82f, w * .7f, w * .76f, w * .72f, w * .66f, w * .72f); lineTo(w * .2f, w * .72f) }
         drawPath(top, col, style = st); drawPath(bot, col, style = st)
         drawPath(Path().apply { moveTo(w * .7f, w * .18f); lineTo(w * .82f, w * .28f); lineTo(w * .7f, w * .38f) }, col, style = st)
         drawPath(Path().apply { moveTo(w * .3f, w * .62f); lineTo(w * .18f, w * .72f); lineTo(w * .3f, w * .82f) }, col, style = st)
         if (mode == 2) drawCircle(activeColor, w * .07f, Offset(w * .5f, w * .5f))
+        }
     }
 }
 
 /** Two diagonal arrows pointing outwards (open full screen). */
 @Composable
 fun ExpandIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
+    val ph = LocalIconPhase.current
+    Canvas(modifier.size(size).appear(ph)) {
         val w = this.size.width
         val st = Stroke(w * .1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawLine(color, Offset(w * .58f, w * .42f), Offset(w * .84f, w * .16f), w * .1f, StrokeCap.Round)
-        drawPath(Path().apply { moveTo(w * .58f, w * .16f); lineTo(w * .84f, w * .16f); lineTo(w * .84f, w * .42f) }, color, style = st)
-        drawLine(color, Offset(w * .42f, w * .58f), Offset(w * .16f, w * .84f), w * .1f, StrokeCap.Round)
-        drawPath(Path().apply { moveTo(w * .16f, w * .58f); lineTo(w * .16f, w * .84f); lineTo(w * .42f, w * .84f) }, color, style = st)
+        val d = (1f - ease(seg(ph.value, .1f, 1f))) * w * .14f
+        translate(-d, d) {
+            drawLine(color, Offset(w * .58f, w * .42f), Offset(w * .84f, w * .16f), w * .1f, StrokeCap.Round)
+            drawPath(Path().apply { moveTo(w * .58f, w * .16f); lineTo(w * .84f, w * .16f); lineTo(w * .84f, w * .42f) }, color, style = st)
+        }
+        translate(d, -d) {
+            drawLine(color, Offset(w * .42f, w * .58f), Offset(w * .16f, w * .84f), w * .1f, StrokeCap.Round)
+            drawPath(Path().apply { moveTo(w * .16f, w * .58f); lineTo(w * .16f, w * .84f); lineTo(w * .42f, w * .84f) }, color, style = st)
+        }
     }
 }

@@ -492,6 +492,18 @@ fun IslandRoot(
                 },
         ) {
             val key = CKey(primary?.id, primary?.kind, ex)
+            // How this change animates: [0] blur (open/close, new arrival — never when sliding between
+            // activities), [1] icons animate in (everything but a finger swipe, already shown live).
+            val fxMode = remember { BooleanArray(2) { true } }
+            val prevKey = remember { arrayOfNulls<CKey>(1) }
+            if (prevKey[0] != key) {
+                val a0 = prevKey[0]
+                val swiped = swipeTarget != null && key.id == swipeTarget
+                val lateral = a0 != null && a0.id != key.id && (a0.kind?.prio ?: 9) < 5 && (key.kind?.prio ?: 9) < 5
+                fxMode[0] = !swiped && !lateral
+                fxMode[1] = !swiped
+                prevKey[0] = key
+            }
             AnimatedContent(
                 targetState = key,
                 contentAlignment = Alignment.TopCenter,
@@ -515,7 +527,27 @@ fun IslandRoot(
                 },
                 label = "content",
             ) { k ->
-                val blur by transition.animateDp(label = "blur") { if (it == EnterExitState.Visible) 0.dp else 10.dp }
+                val blurFx = fxMode[0]; val iconFx = fxMode[1]
+                // Apple-style: the old content melts into a blur as the shape morphs, the new one comes into focus.
+                val blur by transition.animateDp(
+                    transitionSpec = {
+                        if (targetState == EnterExitState.Visible) tween(340, 40, FastOutSlowInEasing) else tween(170, easing = FastOutSlowInEasing)
+                    },
+                    label = "blur",
+                ) {
+                    if (!blurFx) 0.dp else when (it) {
+                        EnterExitState.PreEnter -> 14.dp
+                        EnterExitState.Visible -> 0.dp
+                        EnterExitState.PostExit -> 18.dp
+                    }
+                }
+                val iconPhase = transition.animateFloat(
+                    transitionSpec = {
+                        if (targetState == EnterExitState.Visible) tween(560, 80, androidx.compose.animation.core.LinearEasing)
+                        else tween(190, easing = androidx.compose.animation.core.LinearEasing)
+                    },
+                    label = "icons",
+                ) { if (it == EnterExitState.Visible || !iconFx) 1f else 0f }
                 val all by IslandStore.acts.collectAsState()
                 val rk by IslandStore.replying.collectAsState()
                 val nl by IslandStore.notifs.collectAsState()
@@ -536,7 +568,9 @@ fun IslandRoot(
                         .blur(blur, BlurredEdgeTreatment.Unbounded)
                         .padding(top = extra)
                 ) {
-                    if (a != null) Content(a, k.ex, c, h0) { poke++ }
+                    if (a != null) androidx.compose.runtime.CompositionLocalProvider(LocalIconPhase provides iconPhase) {
+                        Content(a, k.ex, c, h0) { poke++ }
+                    }
                 }
             }
             if (peek != null) {
