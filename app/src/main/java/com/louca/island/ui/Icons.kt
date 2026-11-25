@@ -552,16 +552,15 @@ fun LyricsIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     }
 }
 
-/** Screen recording: a phone screen outline with a pulsing record dot inside. */
+/** Screen recording: the classic record button — a ring with a pulsing solid dot. */
 @Composable
 fun ScreenRecIcon(color: Color, size: Dp, modifier: Modifier = Modifier) {
     val inf = rememberInfiniteTransition(label = "sr")
-    val a by inf.animateFloat(1f, .45f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "a")
+    val p by inf.animateFloat(1f, .72f, infiniteRepeatable(tween(850, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "p")
     Canvas(modifier.size(size)) {
         val w = this.size.width
-        drawRoundRect(color, Offset(w * .26f, w * .08f), Size(w * .48f, w * .84f), CornerRadius(w * .12f), style = Stroke(w * .085f))
-        drawLine(color, Offset(w * .44f, w * .17f), Offset(w * .56f, w * .17f), w * .06f, StrokeCap.Round)
-        drawCircle(color.copy(alpha = a), w * .13f, Offset(w / 2, w * .52f))
+        drawCircle(color, w * .42f, style = Stroke(w * .1f))
+        drawCircle(color, w * .24f * p)
     }
 }
 

@@ -196,8 +196,9 @@ class IslandNotificationService : NotificationListenerService() {
         }
         val sport = Regex("""^(.{2,30}?)\s+(\d{1,3})\s*[-–:]\s*(\d{1,3})\s+(.{2,30})$""").find(title.trim())
         val isClock = pkg.contains("clockpackage") || pkg.contains("deskclock")
-        val isNav = n.category == "navigation" || pkg == "com.google.android.apps.maps" || pkg.contains("waze") ||
-            pkg.contains("navigation")
+        val isRec = pkg.contains("smartcapture") || pkg.contains("screenrecord") ||
+            Regex("enregistrement (de l.)?[ée]cran|screen record|arr[eê]ter l.enregistrement").containsMatchIn(low)
+        val isNav = !isRec && (n.category == "navigation" || pkg == "com.google.android.apps.maps" || pkg.contains("waze"))
 
         when {
             n.category == Notification.CATEGORY_CALL || template.contains("CallStyle") -> {
@@ -209,6 +210,17 @@ class IslandNotificationService : NotificationListenerService() {
                         icon = largeIcon(n), appIcon = appIcon(pkg),
                         base = n.`when`, chrono = chrono, incoming = incoming,
                         actions = btns, contentIntent = n.contentIntent ?: n.fullScreenIntent,
+                    )
+                )
+            }
+
+            ongoing && isRec && !pkg.contains("voicenote") -> {
+                IslandStore.upsert(
+                    Act(
+                        id = "rec:${sbn.key}", kind = Kind.RECORD, key = sbn.key, pkg = pkg, appName = label(pkg),
+                        title = title, text = text, base = n.`when`, chrono = true,
+                        timeText = findTime("$title $text"),
+                        actions = btns, contentIntent = n.contentIntent,
                     )
                 )
             }
@@ -234,17 +246,6 @@ class IslandNotificationService : NotificationListenerService() {
                 )
             }
 
-            ongoing && (pkg.contains("smartcapture") || pkg.contains("screenrecord") ||
-                low.contains("enregistrement de l") || low.contains("screen record")) -> {
-                IslandStore.upsert(
-                    Act(
-                        id = "rec:${sbn.key}", kind = Kind.RECORD, key = sbn.key, pkg = pkg, appName = label(pkg),
-                        title = title, text = text, base = n.`when`, chrono = true,
-                        timeText = findTime("$title $text"),
-                        actions = btns, contentIntent = n.contentIntent,
-                    )
-                )
-            }
 
             n.category == Notification.CATEGORY_ALARM && (ongoing || n.fullScreenIntent != null) && st.showAlarm -> {
                 IslandStore.upsert(

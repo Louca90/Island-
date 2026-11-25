@@ -849,16 +849,16 @@ private val guideSteps = listOf(
     GStep("5. Passer en écran partagé",
         "Le code d'appairage disparaît dès que tu changes d'app. Ouvre les applis récentes, appuie sur l'icône de Termux › « Ouvrir en vue écran partagé », puis mets Paramètres › Débogage sans fil dans l'autre moitié."),
     GStep("6. Appairer Termux",
-        "Dans Débogage sans fil, appuie sur « Associer l'appareil avec un code d'association ». Note le PORT affiché après les « : » (ex. 37451) et le code à 6 chiffres. Dans Termux, tape la commande en remplaçant PORT, puis entre le code.",
-        cmd = "adb pair localhost:PORT"),
+        "Dans Débogage sans fil, appuie sur « Associer l'appareil avec un code d'association ». Tape adb pair suivi de l'« Adresse IP et port » EXACTEMENT comme affichée (ex. 10.61.9.95:35071), puis entre le code à 6 chiffres. Si tu te trompes, appuie sur Annuler et redemande un code.",
+        cmd = "adb pair IP:PORT"),
     GStep("7. Se connecter",
-        "Ferme la fenêtre d'appairage. Sur l'écran Débogage sans fil, regarde « Adresse IP et port » : c'est un AUTRE port. Tape la commande avec ce port. « connected » doit s'afficher.",
-        cmd = "adb connect localhost:PORT"),
+        "Ferme la fenêtre d'appairage. Sur l'écran principal Débogage sans fil, regarde « Adresse IP et port » : c'est un AUTRE port que celui de l'appairage. Tape adb connect suivi de cette adresse telle quelle. « connected » doit s'afficher.",
+        cmd = "adb connect IP:PORT"),
     GStep("8. Donner l'autorisation à Island",
         "Dernière commande, à coller telle quelle. Elle ne renvoie rien si tout va bien.",
         cmd = "adb shell pm grant com.louca.island android.permission.WRITE_SECURE_SETTINGS"),
     GStep("C'est fait",
-        "Reviens dans Island : l'interrupteur « Désactiver les pop-ups » est apparu dans la carte Pop-ups Samsung. Tu peux couper le débogage sans fil, l'autorisation reste.\n\nEn cas de souci :\n• « failed to connect » : le port change à chaque activation, reprends-le à l'étape 7.\n• « protocol fault » ou refus : refais l'étape 6.\n• « Unknown package » : vérifie que tu as bien installé Island avant."),
+        "Reviens dans Island : l'interrupteur « Désactiver les pop-ups » est apparu dans la carte Pop-ups Samsung. Tu peux couper le débogage sans fil, l'autorisation reste.\n\nEn cas de souci :\n• « failed to connect » : le port change à chaque activation, reprends-le à l'étape 7.\n• « protocol fault » : vérifie que tu as tapé IP:PORT sans « localhost: » devant, redemande un code (étape 6), et si ça persiste fais « pkg upgrade -y android-tools ».\n• « Unknown package » : vérifie que tu as bien installé Island avant."),
 )
 
 @Composable
