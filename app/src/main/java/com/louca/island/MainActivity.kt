@@ -333,6 +333,17 @@ private fun Home() {
     val listener = remember(tick) { NotificationManagerCompat.getEnabledListenerPackages(ctx).contains(ctx.packageName) }
     val battery = remember(tick) { ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName) }
     val ready = a11y && listener
+    // "Enabled" in Settings isn't "running": after an update, a reinstall or "Tout remettre", Android can leave
+    // the island or the notification reader stopped. Check, and restart what can be restarted.
+    var stuck by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val scopeH = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(tick) {
+        if (listener && !com.louca.island.IslandNotificationService.connected) runCatching {
+            android.service.notification.NotificationListenerService.requestRebind(ComponentName(ctx, com.louca.island.IslandNotificationService::class.java))
+        }
+        kotlinx.coroutines.delay(1500)
+        stuck = a11y && IslandStore.stopIsland == null
+    }
 
     val cs = MaterialTheme.colorScheme
     val bars = WindowInsets.systemBars.asPaddingValues()
@@ -762,6 +773,28 @@ private fun Home() {
         }
 
         item { PreviewCard() }
+
+        if (ready && stuck) item {
+            val sec = ctx.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(cs.errorContainer)
+                    .clickable {
+                        if (sec) scopeH.launch { restartA11y(ctx); kotlinx.coroutines.delay(1200); tick++ }
+                        else ctx.startActivity(Intent(SysSettings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("L'île est arrêtée", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = cs.onErrorContainer)
+                    Text(
+                        if (sec) "Android l'a coupée (mise à jour, réinstallation). Touche pour la relancer."
+                        else "Android l'a coupée. Accessibilité › Island : désactive puis réactive.",
+                        fontSize = 13.sp, color = cs.onErrorContainer,
+                    )
+                }
+                Text(if (sec) "Relancer ›" else "Ouvrir ›", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = cs.onErrorContainer)
+            }
+        }
 
         if (!ready) item {
             Row(
@@ -1324,6 +1357,20 @@ private fun CategoryRow(p: PageDef, onClick: () -> Unit) {
             Text(p.subtitle, fontSize = 13.sp, color = cs.onSurfaceVariant)
         }
         Text("›", fontSize = 22.sp, color = cs.onSurfaceVariant)
+    }
+}
+
+/** Restarts the accessibility service by switching it off and on in Settings (needs the Termux permission). */
+private suspend fun restartA11y(ctx: android.content.Context) {
+    val cr = ctx.contentResolver
+    val me = ComponentName(ctx, IslandAccessibilityService::class.java).flattenToString()
+    val cur = SysSettings.Secure.getString(cr, SysSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+    val others = cur.split(':').filter { it.isNotBlank() && !it.startsWith(ctx.packageName + "/") }
+    runCatching {
+        SysSettings.Secure.putString(cr, SysSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES, others.joinToString(":"))
+        kotlinx.coroutines.delay(500)
+        SysSettings.Secure.putString(cr, SysSettings.Secure.ENABLED_ACCESSIBILITY_SERVICES, (others + me).joinToString(":"))
+        SysSettings.Secure.putInt(cr, SysSettings.Secure.ACCESSIBILITY_ENABLED, 1)
     }
 }
 

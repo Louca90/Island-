@@ -377,6 +377,16 @@ fun IslandRoot(
     LaunchedEffect(follow, back?.id, ex) {
         if (swipeTarget == null && swapA.value == 0f && pullA.value != 0f && (!follow || back == null || ex)) pullA.animateTo(0f, spring(1f, 500f))
     }
+    // coming back (island switched on again, back from StandBy, fullscreen…): no gesture half-done from before
+    LaunchedEffect(visible) {
+        if (visible) {
+            swipeTarget = null; swipedFrom = null
+            dragX.snapTo(0f); dragY.snapTo(0f); pullA.snapTo(0f); swapA.snapTo(0f)
+        } else if (!s.islandOn) {
+            IslandStore.expanded.value = false
+            IslandStore.replying.value = null
+        }
+    }
     class Swipe(val follow: Boolean, val right: Act?, val left: Act?, val dist: (Act?) -> Float, val back: Act?)
     val swipe by rememberUpdatedState(Swipe(follow, nextR, nextL, ::distTo, back))
     LaunchedEffect(primary?.id) {

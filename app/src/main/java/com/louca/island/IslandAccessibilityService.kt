@@ -224,6 +224,10 @@ class IslandAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         IslandStore.stopIsland = { runCatching { disableSelf() } }
+        // the notification listener may have been unbound (Tout remettre) or killed: ask Android to bind it again
+        if (!IslandNotificationService.connected) runCatching {
+            android.service.notification.NotificationListenerService.requestRebind(android.content.ComponentName(this, IslandNotificationService::class.java))
+        }
         km = getSystemService(KeyguardManager::class.java)
         wm = getSystemService(WindowManager::class.java)
         landscape.value = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -234,7 +238,8 @@ class IslandAccessibilityService : AccessibilityService() {
         owner.attach(v)
         v.addView(ComposeView(this).apply { setContent { Overlay() } })
         v.setOnApplyWindowInsetsListener { _, ins ->
-            fullscreen.value = !ins.isVisible(WindowInsets.Type.statusBars())
+            insetsHideBar = !ins.isVisible(WindowInsets.Type.statusBars())
+            refreshFullscreen()
             ins
         }
         val t = TouchFrame(this).apply {
@@ -323,6 +328,11 @@ class IslandAccessibilityService : AccessibilityService() {
         val zones = if (locked) s.deadZonesLock else s.deadZones
         val standby by IslandStore.standby.collectAsState()
         val hidden = !s.islandOn || land || (s.hideFullscreen && fs) || (s.hideShade && shade) || replying != null || standby
+        // hidden → the touch window goes dead right away (not after the closing animation)
+        androidx.compose.runtime.LaunchedEffect(hidden) {
+            islandHidden = hidden
+            if (hidden) setZone(null)
+        }
         val colors = rememberIslandColors(s)
         IslandRoot(
             acts = acts, pick = pick, expandedFlag = expanded, s = s, c = colors, hidden = hidden,
@@ -516,9 +526,12 @@ class IslandAccessibilityService : AccessibilityService() {
         if (f != null) IslandStore.upsert(f) else IslandStore.remove("event")
     }
 
+    /** Set from the overlay: the island is hidden (fullscreen, switched off…). Then nothing may catch touches. */
+    private var islandHidden = false
+
     private fun setZone(r: Rect?) {
         val t = touch ?: return
-        if (r == null || r.width() <= 0 || r.height() <= 0) {
+        if (r == null || r.width() <= 0 || r.height() <= 0 || islandHidden) {
             tlp.width = 1; tlp.height = 1
             tlp.flags = tlp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         } else {
@@ -668,7 +681,25 @@ class IslandAccessibilityService : AccessibilityService() {
         runCatching { cm.registerNetworkCallback(req, cb) }
     }
 
+    // ---- fullscreen detection
+    private var insetsHideBar = false
+
+    /** Status bar window currently on screen (it disappears in immersive apps: videos, games). */
+    private fun statusBarWindowShown(): Boolean = runCatching {
+        val sb = wm?.currentWindowMetrics?.windowInsets?.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars())?.top ?: 0
+        if (sb <= 0) return@runCatching false
+        val r = Rect()
+        windows.any { it.type == AccessibilityWindowInfo.TYPE_SYSTEM && run { it.getBoundsInScreen(r); r.top <= 0 && r.height() in 1..(sb * 2) } }
+    }.getOrDefault(false)
+
+    /** Fullscreen only when the insets say the bar is hidden AND no status bar window is showing: never hide the island by mistake. */
+    private fun refreshFullscreen() {
+        visual?.rootWindowInsets?.let { insetsHideBar = !it.isVisible(WindowInsets.Type.statusBars()) }
+        fullscreen.value = insetsHideBar && !statusBarWindowShown()
+    }
+
     private fun checkShade() {
+        refreshFullscreen()
         if (!Prefs.state.value.hideShade || km.isKeyguardLocked) { shadeOpen.value = false; return }
         val screenH = resources.displayMetrics.heightPixels
         val r = Rect()
@@ -682,6 +713,7 @@ class IslandAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        IslandStore.stopIsland = null
         runCatching { unregisterReceiver(rx) }
         visual?.let { runCatching { wm?.removeView(it) } }
         touch?.let { runCatching { wm?.removeView(it) } }

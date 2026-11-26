@@ -109,6 +109,7 @@ class IslandNotificationService : NotificationListenerService() {
     }
 
     override fun onListenerConnected() {
+        connected = true
         IslandStore.cancelNotif = { k -> runCatching { cancelNotification(k) } }
         msm = getSystemService(MediaSessionManager::class.java)
         val cn = ComponentName(this, IslandNotificationService::class.java)
@@ -120,6 +121,7 @@ class IslandNotificationService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        connected = false
         runCatching { msm?.removeOnActiveSessionsChangedListener(sessListener) }
         ctrls.forEach { runCatching { it.unregisterCallback(cb) } }
         ctrls.clear()
@@ -637,6 +639,8 @@ class IslandNotificationService : NotificationListenerService() {
     companion object {
         const val MODES = "com.samsung.android.app.routines"
         @Volatile var instance: IslandNotificationService? = null
+        /** Bound and receiving notifications (false after an unbind, until a rebind). */
+        @Volatile var connected = false
 
         fun accentOf(b: Bitmap?): Int {
             if (b == null) return 0
