@@ -94,6 +94,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -355,9 +357,20 @@ private fun PlayerScreen() {
         else act?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
+    // bass-reactive background: listen only while the player is on screen
+    val bassOn by Spotify.bassOn.collectAsState()
+    val micOk = remember(bassOn) { ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    var micGranted by remember { mutableStateOf(micOk) }
+    val askMic = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { micGranted = it; if (!it) Spotify.setBass(false) }
+    LaunchedEffect(Unit) { if (bassOn && !micGranted) askMic.launch(android.Manifest.permission.RECORD_AUDIO) }
+    LifecycleResumeEffect(bassOn, micGranted) {
+        if (bassOn && micGranted) Bass.start(ctx)
+        onPauseOrDispose { Bass.stop() }
+    }
+
     Box(Modifier.fillMaxSize()) {
-        MovingBackdrop(accent, pb?.playing == true)
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .35f)))
+        DepthBackdrop(cover, accent, pb?.playing == true)
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = if (landscape) 28.dp else 20.dp)) {
             val openDevices = { devicesOpen = true; Spotify.scope.launch { Spotify.refreshDevices() }; Unit }
             val extras: @Composable () -> Unit = { DeviceButton(pb?.device, openDevices); MenuButton { menu = true } }
@@ -377,6 +390,12 @@ private fun PlayerScreen() {
                 Pill("Batterie de Spotify", Color.White.copy(alpha = .12f), Color.White, modifier = Modifier.fillMaxWidth()) {
                     ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$SPOTIFY")))
                 }
+                Pill(if (bassOn) "Fond réactif aux basses : activé" else "Fond réactif aux basses : désactivé",
+                    Color.White.copy(alpha = .12f), Color.White, modifier = Modifier.fillMaxWidth()) {
+                    if (bassOn) Spotify.setBass(false) else { Spotify.setBass(true); if (!micGranted) askMic.launch(android.Manifest.permission.RECORD_AUDIO) }
+                }
+                Text("Si le son vient d'un autre appareil (PC, enceinte), le micro écoute les basses de la pièce. Rien n'est enregistré.",
+                    color = Color.White.copy(alpha = .5f), fontSize = 12.sp)
                 Pill("Se déconnecter", Color(0xFFFF453A).copy(alpha = .2f), Color(0xFFFF6B6B), modifier = Modifier.fillMaxWidth()) {
                     menu = false; Spotify.signOut()
                 }
@@ -863,6 +882,70 @@ private fun SpeakerIcon(color: Color, size: Dp, waves: Int) {
         val st = Stroke(w * .08f, cap = StrokeCap.Round)
         if (waves >= 1) drawArc(color, -45f, 90f, false, Offset(w * .44f, w * .3f), Size(w * .4f, w * .4f), style = st)
         if (waves >= 2) drawArc(color, -45f, 90f, false, Offset(w * .36f, w * .14f), Size(w * .72f, w * .72f), style = st)
+    }
+}
+
+/**
+ * Apple Music–style living background: the cover, heavily blurred, flows out of the centre in layers
+ * (a slow flight into depth). Bass hits push the layers forward, swell them and light the centre.
+ */
+@Composable
+private fun DepthBackdrop(cover: android.graphics.Bitmap?, accent: Color, playing: Boolean) {
+    val bassRaw by Bass.level.collectAsState()
+    val bass by animateFloatAsState(bassRaw, spring(1f, 420f), label = "bass")
+    val img = remember(cover) { cover?.let { android.graphics.Bitmap.createScaledBitmap(it, 96, 96, true).asImageBitmap() } }
+    val speed by animateFloatAsState(if (playing) 1f else .2f, tween(1600), label = "spd")
+    var phase by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) withFrameMillis { t ->
+            if (last != 0L) phase += (t - last) / 1000f * speed * (1f + bass * 2.2f)
+            last = t
+        }
+    }
+    val glowCol by animateColorAsState(lerp(accent, Color.White, .25f), tween(1500), label = "glow")
+    Box(Modifier.fillMaxSize()) {
+        Crossfade(img, animationSpec = tween(1400), label = "bg") { im ->
+            Canvas(
+                Modifier.fillMaxSize().graphicsLayer {
+                    renderEffect = androidx.compose.ui.graphics.BlurEffect(110f, 110f, androidx.compose.ui.graphics.TileMode.Mirror)
+                }
+            ) {
+                val w = size.width; val h = size.height
+                val c = Offset(w / 2, h / 2)
+                val base = max(w, h)
+                if (im == null) {
+                    drawRect(Brush.radialGradient(listOf(accent, Color.Black), c, base * .7f))
+                    return@Canvas
+                }
+                fun layer(scale: Float, rot: Float, alpha: Float) {
+                    if (alpha <= 0f) return
+                    val s = base * scale
+                    withTransform({ rotate(rot, c) }) {
+                        drawImage(im, dstOffset = androidx.compose.ui.unit.IntOffset((c.x - s / 2).toInt(), (c.y - s / 2).toInt()),
+                            dstSize = androidx.compose.ui.unit.IntSize(s.toInt(), s.toInt()), alpha = alpha)
+                    }
+                }
+                // backdrop that fills everything, turning slowly
+                layer(2.6f, phase * 4f, 1f)
+                // the tunnel: layers born small in the centre, growing towards you and fading at the edges
+                val n = 5
+                for (i in 0 until n) {
+                    val k = ((phase * .07f + i.toFloat() / n) % 1f)
+                    val sc = (.25f + k * 2.4f) * (1f + bass * .18f)
+                    val al = kotlin.math.sin(k * Math.PI.toFloat()).coerceAtLeast(0f) * .85f
+                    layer(sc, (if (i % 2 == 0) 1 else -1) * phase * 9f + i * 72f, al)
+                }
+            }
+        }
+        // light in the centre that breathes with the bass, darker edges for depth and readability
+        Canvas(Modifier.fillMaxSize()) {
+            val c = Offset(size.width / 2, size.height / 2)
+            val r = max(size.width, size.height)
+            drawRect(Brush.radialGradient(listOf(glowCol.copy(alpha = .08f + .32f * bass), Color.Transparent), c, r * (.35f + .15f * bass)))
+            drawRect(Brush.radialGradient(0f to Color.Transparent, .55f to Color.Black.copy(alpha = .25f), 1f to Color.Black.copy(alpha = .75f), center = c, radius = r * .75f))
+            drawRect(Color.Black.copy(alpha = .22f))
+        }
     }
 }
 

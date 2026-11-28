@@ -83,6 +83,9 @@ object Spotify {
     val devices = MutableStateFlow<List<Device>>(emptyList())
     val liked = MutableStateFlow<Boolean?>(null)
     val authError = MutableStateFlow<String?>(null)
+    /** Background reacts to the bass (needs the microphone permission). */
+    val bassOn = MutableStateFlow(true)
+    fun setBass(on: Boolean) { bassOn.value = on; prefs.edit().putBoolean("bass", on).apply() }
 
     private var access = ""
     private var expires = 0L
@@ -96,6 +99,8 @@ object Spotify {
         access = prefs.getString("access", "") ?: ""
         expires = prefs.getLong("expires", 0)
         signedIn.value = !prefs.getString("refresh", null).isNullOrBlank()
+        bassOn.value = prefs.getBoolean("bass", true)
+        AudioStateHolder.am = app.getSystemService(android.media.AudioManager::class.java)
     }
 
     fun setClientId(id: String) {
