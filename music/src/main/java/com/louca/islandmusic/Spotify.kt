@@ -112,6 +112,10 @@ object Spotify {
 
     // ---------------------------------------------------------------- sign-in (PKCE + loopback)
 
+    /** Fixed: Spotify's dashboard refuses a loopback redirect without a port. */
+    const val PORT = 8888
+    const val REDIRECT = "http://127.0.0.1:$PORT/callback"
+
     private const val SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing " +
         "user-library-read user-library-modify"
 
@@ -130,10 +134,10 @@ object Spotify {
         )
         val state = randomString(16)
         scope.launch(Dispatchers.IO) {
-            val server = runCatching { ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")) }.getOrElse {
-                authError.value = "Impossible d'ouvrir le retour de connexion."; return@launch
+            val server = runCatching { ServerSocket(PORT, 1, InetAddress.getByName("127.0.0.1")).apply { reuseAddress = true } }.getOrElse {
+                authError.value = "Le port $PORT est déjà utilisé, ferme l'app et réessaie."; return@launch
             }
-            val redirect = "http://127.0.0.1:${server.localPort}/callback"
+            val redirect = REDIRECT
             val url = "https://accounts.spotify.com/authorize?response_type=code" +
                 "&client_id=${enc(id)}&scope=${enc(SCOPES)}&redirect_uri=${enc(redirect)}" +
                 "&code_challenge_method=S256&code_challenge=$challenge&state=$state"

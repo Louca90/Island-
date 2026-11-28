@@ -22,4 +22,4 @@ Le bouton « Vérifier » de l'app regarde les Releases **et** `dist/`, et prend
 App à part pour contrôler Spotify via la Web API (Spotify Connect) : volume de l'appareil qui joue (PC, enceinte…),
 paroles LRCLIB avec recherche tolérante, file d'attente avec pochettes, choix de l'appareil, relance de Spotify
 quand Android l'a tué. APK : `dist/IslandMusic.apk`. Nécessite une app sur developer.spotify.com
-(Redirect URI `http://127.0.0.1/callback`) et un compte Premium.
+(Redirect URI `http://127.0.0.1:8888/callback`) et un compte Premium.

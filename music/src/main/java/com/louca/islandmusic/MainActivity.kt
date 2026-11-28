@@ -205,11 +205,11 @@ private fun Setup() {
             Bullet("Redirect URI : colle exactement l'adresse ci-dessous, puis « Add ».")
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = .08f))
-                    .pointerInput(Unit) { detectTapGestures { clip.setText(AnnotatedString("http://127.0.0.1/callback")) } }
+                    .pointerInput(Unit) { detectTapGestures { clip.setText(AnnotatedString(Spotify.REDIRECT)) } }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("http://127.0.0.1/callback", color = Green, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text(Spotify.REDIRECT, color = Green, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Text("Copier", color = Color.White.copy(alpha = .6f), fontSize = 13.sp)
             }
             Bullet("Coche « Web API », accepte les conditions, « Save ».")
