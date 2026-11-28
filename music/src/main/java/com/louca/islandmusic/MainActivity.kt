@@ -133,10 +133,41 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Spotify.init(this)
         enableEdgeToEdge()
+        setShowWhenLocked(true)
+        onIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Green, background = Color.Black, surface = Color(0xFF121212))) {
                 App()
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); onIntent(intent) }
+
+    private var unplug: android.content.BroadcastReceiver? = null
+
+    /** Opened by Island on the wireless charger: wake the screen, stay on, close when unplugged. */
+    private fun onIntent(i: Intent?) {
+        if (i?.getBooleanExtra("standby", false) != true) return
+        setTurnScreenOn(true)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (unplug == null) {
+            unplug = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, it: Intent) { finish() }
+            }
+            registerReceiver(unplug, android.content.IntentFilter(Intent.ACTION_POWER_DISCONNECTED))
+        }
+    }
+
+    override fun onDestroy() { unplug?.let { runCatching { unregisterReceiver(it) } }; super.onDestroy() }
+
+    /** No status bar, no navigation bar: swipe from an edge to see them for a moment. */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) return
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
 
@@ -328,10 +359,12 @@ private fun PlayerScreen() {
         MovingBackdrop(accent, pb?.playing == true)
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .35f)))
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = if (landscape) 28.dp else 20.dp)) {
-            TopBar(pb?.device, onDevices = { devicesOpen = true; Spotify.scope.launch { Spotify.refreshDevices() } }, onMenu = { menu = true })
+            val openDevices = { devicesOpen = true; Spotify.scope.launch { Spotify.refreshDevices() }; Unit }
+            val extras: @Composable () -> Unit = { DeviceButton(pb?.device, openDevices); MenuButton { menu = true } }
             if (pb == null || track == null) {
-                NothingPlaying(problem) { devicesOpen = true; Spotify.scope.launch { Spotify.refreshDevices() } }
-            } else if (landscape) Landscape(pb!!, track, cover, accent) else Portrait(pb!!, track, cover, accent)
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) { extras() }
+                NothingPlaying(problem, openDevices)
+            } else if (landscape) Landscape(pb!!, track, cover, accent, extras) else Portrait(pb!!, track, cover, accent, extras)
         }
         AnimatedVisibility(devicesOpen, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
             DeviceSheet { devicesOpen = false }
@@ -352,25 +385,22 @@ private fun PlayerScreen() {
     }
 }
 
+/** The device that plays, as a round button on the tab row (doesn't push the player down). */
 @Composable
-private fun TopBar(device: Device?, onDevices: () -> Unit, onMenu: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            Modifier.clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = .1f))
-                .pointerInput(Unit) { detectTapGestures { onDevices() } }
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            DeviceIcon(device?.type ?: "", if (device != null) Green else Color.White.copy(alpha = .6f), 18.dp)
-            Spacer(Modifier.width(8.dp))
-            Text(device?.name ?: "Choisir un appareil", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+private fun DeviceButton(device: Device?, onClick: () -> Unit) {
+    Tap(40.dp, "Appareil : ${device?.name ?: "aucun"}", onClick) {
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(18.dp)).background(if (device != null) Green.copy(alpha = .18f) else Color.White.copy(alpha = .1f)),
+            contentAlignment = Alignment.Center) {
+            DeviceIcon(device?.type ?: "", if (device != null) Green else Color.White.copy(alpha = .7f), 18.dp)
         }
-        Spacer(Modifier.weight(1f))
-        Tap(40.dp, "Menu", onMenu) {
-            Canvas(Modifier.size(20.dp)) {
-                listOf(.2f, .5f, .8f).forEach { drawCircle(Color.White.copy(alpha = .8f), size.width * .09f, Offset(size.width * it, size.height / 2)) }
-            }
+    }
+}
+
+@Composable
+private fun MenuButton(onClick: () -> Unit) {
+    Tap(40.dp, "Menu", onClick) {
+        Canvas(Modifier.size(20.dp)) {
+            listOf(.2f, .5f, .8f).forEach { drawCircle(Color.White.copy(alpha = .8f), size.width * .09f, Offset(size.width * it, size.height / 2)) }
         }
     }
 }
@@ -432,10 +462,10 @@ private suspend fun revive(ctx: Context) {
 // ---- layouts
 
 @Composable
-private fun Portrait(pb: Playback, t: Track, cover: android.graphics.Bitmap?, accent: Color) {
+private fun Portrait(pb: Playback, t: Track, cover: android.graphics.Bitmap?, accent: Color, extras: @Composable () -> Unit) {
     var view by remember { mutableIntStateOf(0) } // 0 cover, 1 lyrics, 2 queue
     BackHandler(view != 0) { view = 0 }
-    Column(Modifier.fillMaxSize().padding(bottom = 8.dp)) {
+    Column(Modifier.fillMaxSize().padding(top = 12.dp, bottom = 8.dp)) {
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Crossfade(view, animationSpec = tween(320), label = "view") { v ->
                 when (v) {
@@ -454,15 +484,17 @@ private fun Portrait(pb: Playback, t: Track, cover: android.graphics.Bitmap?, ac
         Spacer(Modifier.height(10.dp))
         VolumeBar(pb)
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TabPill("Paroles", view == 1) { view = if (view == 1) 0 else 1 }
             TabPill("File d'attente", view == 2) { view = if (view == 2) 0 else 2 }
+            Spacer(Modifier.weight(1f))
+            extras()
         }
     }
 }
 
 @Composable
-private fun Landscape(pb: Playback, t: Track, cover: android.graphics.Bitmap?, accent: Color) {
+private fun Landscape(pb: Playback, t: Track, cover: android.graphics.Bitmap?, accent: Color, extras: @Composable () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     Row(Modifier.fillMaxSize().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.fillMaxHeight().weight(.46f), verticalArrangement = Arrangement.Center) {
@@ -480,9 +512,11 @@ private fun Landscape(pb: Playback, t: Track, cover: android.graphics.Bitmap?, a
         }
         Spacer(Modifier.width(36.dp))
         Column(Modifier.fillMaxHeight().weight(.54f)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TabPill("Paroles", tab == 0) { tab = 0 }
                 TabPill("File d'attente", tab == 1) { tab = 1 }
+                Spacer(Modifier.weight(1f))
+                extras()
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 Crossfade(tab, animationSpec = tween(300), label = "tab") { if (it == 1) QueuePanel(pb) else LyricsPanel(t, pb, big = true) }

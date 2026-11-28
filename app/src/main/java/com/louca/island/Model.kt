@@ -324,6 +324,12 @@ object IslandStore {
 
     fun openStandby(auto: Boolean = false) {
         standbyAuto = auto
+        // Island Music installed: it's the better player (Spotify Connect volume, lyrics, queue covers)
+        appContext.packageManager.getLaunchIntentForPackage("com.louca.islandmusic")?.let { i ->
+            if (runCatching {
+                    appContext.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("standby", auto))
+                }.isSuccess) return
+        }
         runCatching {
             appContext.startActivity(
                 android.content.Intent(appContext, StandbyActivity::class.java)

@@ -247,7 +247,7 @@ object Spotify {
             204 -> { playback.value = null; problem.value = Problem.NO_DEVICE }
             200 -> {
                 val j = JSONObject(r.body)
-                val pb = Playback(
+                val pb0 = Playback(
                     track = j.optJSONObject("item")?.let(::parseTrack),
                     playing = j.optBoolean("is_playing"),
                     progressMs = j.optLong("progress_ms"),
@@ -257,10 +257,11 @@ object Spotify {
                     device = j.optJSONObject("device")?.let(::parseDevice),
                 )
                 val old = playback.value
+                val pb = keepOptimistic(pb0, old)
                 if (!holdingVolume() || pb.device?.volume == old?.device?.volume) playback.value = pb
                 else playback.value = pb.copy(device = pb.device?.copy(volume = old?.device?.volume))
                 problem.value = Problem.NONE
-                if (old?.track?.id != pb.track?.id) { refreshQueue(); refreshLiked() }
+                if (old?.track?.id != pb.track?.id) { wantSeek = null; refreshQueue(); refreshLiked() }
             }
         }
     }
@@ -289,8 +290,29 @@ object Spotify {
 
     private fun after(ms: Long = 350) = scope.launch { delay(ms); refresh() }
 
+    // ---- what we just asked for wins over a poll that was read before Spotify applied it
+    //      (pause → poll still says "playing" → icon flips back → then pause: no more flicker)
+    private var wantPlaying: Boolean? = null; private var wantPlayingUntil = 0L
+    private var wantShuffle: Boolean? = null; private var wantShuffleUntil = 0L
+    private var wantRepeat: Int? = null; private var wantRepeatUntil = 0L
+    private var wantSeek: Long? = null; private var wantSeekUntil = 0L
+
+    private fun keepOptimistic(n: Playback, old: Playback?): Playback {
+        val now = System.currentTimeMillis()
+        var r = n
+        wantPlaying?.let { w -> if (now < wantPlayingUntil && n.playing != w) r = r.copy(playing = w, progressMs = old?.position(now) ?: n.progressMs, at = now) else wantPlaying = null }
+        wantShuffle?.let { w -> if (now < wantShuffleUntil && n.shuffle != w) r = r.copy(shuffle = w) else wantShuffle = null }
+        wantRepeat?.let { w -> if (now < wantRepeatUntil && n.repeat != w) r = r.copy(repeat = w) else wantRepeat = null }
+        wantSeek?.let { w ->
+            if (now < wantSeekUntil && kotlin.math.abs(n.position(now) - (old?.position(now) ?: w)) > 2500) r = r.copy(progressMs = old?.position(now) ?: w, at = now)
+            else wantSeek = null
+        }
+        return r
+    }
+
     fun playPause() {
         val pb = playback.value ?: return
+        wantPlaying = !pb.playing; wantPlayingUntil = System.currentTimeMillis() + 3000
         playback.value = pb.copy(playing = !pb.playing, progressMs = pb.position(), at = System.currentTimeMillis())
         scope.launch { call("PUT", if (pb.playing) "/me/player/pause" else "/me/player/play"); after() }
     }
@@ -304,12 +326,14 @@ object Spotify {
 
     fun seek(ms: Long) {
         val pb = playback.value ?: return
+        wantSeek = ms; wantSeekUntil = System.currentTimeMillis() + 3000
         playback.value = pb.copy(progressMs = ms, at = System.currentTimeMillis())
         scope.launch { call("PUT", "/me/player/seek?position_ms=$ms"); after(600) }
     }
 
     fun toggleShuffle() {
         val pb = playback.value ?: return
+        wantShuffle = !pb.shuffle; wantShuffleUntil = System.currentTimeMillis() + 3000
         playback.value = pb.copy(shuffle = !pb.shuffle)
         scope.launch { call("PUT", "/me/player/shuffle?state=${!pb.shuffle}"); refreshQueue() }
     }
@@ -317,6 +341,7 @@ object Spotify {
     fun cycleRepeat() {
         val pb = playback.value ?: return
         val n = (pb.repeat + 1) % 3
+        wantRepeat = n; wantRepeatUntil = System.currentTimeMillis() + 3000
         playback.value = pb.copy(repeat = n)
         scope.launch { call("PUT", "/me/player/repeat?state=" + when (n) { 1 -> "context"; 2 -> "track"; else -> "off" }) }
     }
